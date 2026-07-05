@@ -54,7 +54,7 @@ DEFAULT_UPDATE_VERSION_URL = 'https://api.github.com/repos/RedteamNotes/dmsa-for
 DEFAULT_SUGGESTED_DMSA_NAME = 'redpen'
 DEFAULT_SUGGESTED_TARGET_ACCOUNT = 'Administrator'
 BADSUCCESSOR_RIGHTS_LABEL = 'BadSuccessor-relevant OU rights'
-BADSUCCESSOR_RIGHTS_MEANING = 'principals that can create dMSA objects or control the listed OUs'
+BADSUCCESSOR_RIGHTS_MEANING = 'create dMSA objects or control listed OUs'
 NEXT_STEP_PREFIX_ENV = 'DMSA_FORGE_NEXT_STEP_PREFIX'
 LDAP_BASE = 'BASE'
 LDAP_LEVEL = 'LEVEL'
@@ -72,9 +72,17 @@ IPV4_LIMITED_BROADCAST = '255.255.255.255'
 DEFAULT_VERIFY_ATTEMPTS = 3
 DEFAULT_VERIFY_DELAY = 2
 PROFILE_CHOICES = ('safe', 'report', 'ci')
+DMSA_EXPECTED_DELEGATED_STATE = '2'
+DMSA_DELEGATED_STATE_MEANINGS = {
+    '2': 'migration complete',
+}
 KRB5CCNAME_ENV = 'KRB5CCNAME'
 KRB5_CONFIG_ENV = 'KRB5_CONFIG'
 CCACHE_SCHEME_RE = re.compile(r'^([A-Za-z][A-Za-z0-9_-]*):(.*)$')
+ANSI_YELLOW = '\033[33m'
+ANSI_RED = '\033[31m'
+ANSI_BOLD_RED = '\033[1;31m'
+ANSI_RESET = '\033[0m'
 
 ASCII_BANNER = r'''
     . .    . .-.    .          .---.
@@ -100,6 +108,32 @@ def escape_filter_chars(value):
 
 def security_descriptor_control(sdflags=LDAP_SD_FLAGS_DEFAULT):
     return {'sdflags': sdflags}
+
+
+def format_dmsa_delegated_state(value):
+    if value in (None, ''):
+        return 'Unknown'
+    state = str(value)
+    meaning = DMSA_DELEGATED_STATE_MEANINGS.get(state)
+    if meaning:
+        return '%s - %s' % (state, meaning)
+    return state
+
+
+class TerminalColorFormatter(logging.Formatter):
+    def __init__(self, inner_formatter=None):
+        super().__init__()
+        self.inner_formatter = inner_formatter or logging.Formatter('%(levelname)s: %(message)s')
+
+    def format(self, record):
+        text = self.inner_formatter.format(record)
+        if record.levelno >= logging.CRITICAL:
+            return '%s%s%s' % (ANSI_BOLD_RED, text, ANSI_RESET)
+        if record.levelno >= logging.ERROR:
+            return '%s%s%s' % (ANSI_RED, text, ANSI_RESET)
+        if record.levelno >= logging.WARNING:
+            return '%s%s%s' % (ANSI_YELLOW, text, ANSI_RESET)
+        return text
 
 try:
     from impacket.examples import logger
@@ -733,10 +767,9 @@ class DMSAForge:
                     self._record_inference(
                         'dc_ip',
                         'rejected',
-                        'DNS resolved %s to %s (%s); pass --dc-ip with the real DC IPv4 if Kerberos /dc guidance is needed' % (
+                        'DNS resolved %s to unusable address %s; pass --dc-ip to use a specific DC IPv4' % (
                             target_host,
                             resolved_dc_ip,
-                            rejection_reason,
                         ),
                         level=logging.WARNING,
                     )
@@ -1102,11 +1135,8 @@ class DMSAForge:
                         'token_groups_read': False,
                     }
 
-                logging.info('Found %d identities with %s (%s):' % (
-                    len(allowed_identities),
-                    BADSUCCESSOR_RIGHTS_LABEL,
-                    BADSUCCESSOR_RIGHTS_MEANING,
-                ))
+                logging.info('Found %d identities with %s.' % (len(allowed_identities), BADSUCCESSOR_RIGHTS_LABEL))
+                logging.info('Rights evaluated: %s.' % BADSUCCESSOR_RIGHTS_MEANING)
                 if current_user.get('status') == 'ok':
                     matched_count = len([
                         sid for sid in allowed_identities
@@ -1114,10 +1144,10 @@ class DMSAForge:
                     ])
                     if matched_count:
                         logging.info('Bound user effective SID check: matched %d listed identity.' % matched_count)
-                    elif current_user.get('token_groups_read'):
+                    elif current_user.get('group_sids_resolved') or current_user.get('token_groups_read'):
                         logging.info('Bound user effective SID check: no match.')
                     else:
-                        logging.info('Bound user effective SID check: unknown for group grants; tokenGroups was not returned.')
+                        logging.info('Bound user effective SID check: unknown; group SID lookup did not return results.')
                 else:
                     logging.info('Bound user effective SID check: unknown. %s' % current_user.get('reason', ''))
                 logging.info("")
@@ -1130,7 +1160,7 @@ class DMSAForge:
                     ou_list = "{%s}" % ", ".join([self._display_dn(ou) for ou in ous])
                     logging.info("%-50s %-18s %s" % (identity[:50], self._bound_user_match_status(sid, current_user), ou_list))
             else:
-                logging.info('No identities found with %s' % BADSUCCESSOR_RIGHTS_LABEL)
+                logging.info('No identities found with %s.' % BADSUCCESSOR_RIGHTS_LABEL)
                 logging.info("")
                 logging.info("%-50s %-18s %s" % ("Identity", "Bound user", "OUs with relevant rights"))
                 logging.info("%-50s %-18s %s" % ("-" * 50, "-" * 18, "-" * 30))
@@ -1306,64 +1336,87 @@ class DMSAForge:
             ])
         search_filter = '(&(|(objectClass=user)(objectClass=computer))(objectSid=*)(|%s))' % ''.join(filter_terms)
 
-        last_result = None
-        for include_token_groups in (True, False):
-            attributes = ['objectSid', 'sAMAccountName', 'distinguishedName', 'cn', 'name', 'userPrincipalName', 'objectClass']
-            if include_token_groups:
-                attributes.append('tokenGroups')
-
-            success = ldap_connection.search(
-                search_base=self._base_dn,
-                search_filter=search_filter,
-                search_scope=LDAP_SUBTREE,
-                attributes=attributes,
-            )
-            last_result = getattr(ldap_connection, 'result', None)
-            if not success:
-                continue
-            if not ldap_connection.entries:
-                return {
-                    'status': 'unavailable',
-                    'reason': 'authenticated account was not found',
-                    'object_sid': None,
-                    'effective_sids': [],
-                    'token_groups_read': False,
-                }
-
-            entry, reason = self._select_account_entry(ldap_connection.entries, names)
-            if entry is None:
-                return {
-                    'status': 'unavailable',
-                    'reason': reason or 'authenticated account lookup was ambiguous',
-                    'object_sid': None,
-                    'effective_sids': [],
-                    'token_groups_read': False,
-                }
-
-            object_sids = self._entry_sid_values(entry, 'objectSid')
-            token_group_sids = self._entry_sid_values(entry, 'tokenGroups')
-            effective_sids = []
-            for sid in object_sids + token_group_sids:
-                if sid not in effective_sids:
-                    effective_sids.append(sid)
-
+        attributes = [
+            'objectSid',
+            'sAMAccountName',
+            'distinguishedName',
+            'cn',
+            'name',
+            'userPrincipalName',
+            'objectClass',
+            'primaryGroupID',
+        ]
+        success = ldap_connection.search(
+            search_base=self._base_dn,
+            search_filter=search_filter,
+            search_scope=LDAP_SUBTREE,
+            attributes=attributes,
+        )
+        last_result = getattr(ldap_connection, 'result', None)
+        if not success:
             return {
-                'status': 'ok',
-                'reason': '',
-                'dn': self._display_dn(entry.entry_dn),
-                'sam_account_name': self._entry_value(entry, 'sAMAccountName') or self._username,
-                'object_sid': object_sids[0] if object_sids else None,
-                'effective_sids': effective_sids,
-                'effective_sid_count': len(effective_sids),
-                'token_groups_read': bool(token_group_sids),
+                'status': 'unavailable',
+                'reason': 'authenticated account SID lookup failed: %s' % last_result,
+                'object_sid': None,
+                'effective_sids': [],
+                'token_groups_read': False,
+                'group_sids_resolved': False,
+            }
+        if not ldap_connection.entries:
+            return {
+                'status': 'unavailable',
+                'reason': 'authenticated account was not found',
+                'object_sid': None,
+                'effective_sids': [],
+                'token_groups_read': False,
+                'group_sids_resolved': False,
             }
 
+        entry, reason = self._select_account_entry(ldap_connection.entries, names)
+        if entry is None:
+            return {
+                'status': 'unavailable',
+                'reason': reason or 'authenticated account lookup was ambiguous',
+                'object_sid': None,
+                'effective_sids': [],
+                'token_groups_read': False,
+                'group_sids_resolved': False,
+            }
+
+        object_sids = self._entry_sid_values(entry, 'objectSid')
+        object_sid = object_sids[0] if object_sids else None
+        token_group_sids, token_groups_read = self._lookup_token_group_sids(ldap_connection, entry.entry_dn)
+        recursive_group_sids = []
+        recursive_groups_read = False
+        if not token_groups_read:
+            recursive_group_sids, recursive_groups_read = self._lookup_recursive_group_sids(ldap_connection, entry.entry_dn)
+
+        primary_group_sid = self._primary_group_sid(object_sid, self._entry_value(entry, 'primaryGroupID'))
+        effective_sids = []
+        for sid in object_sids + token_group_sids + recursive_group_sids + ([primary_group_sid] if primary_group_sid else []):
+            if sid and sid not in effective_sids:
+                effective_sids.append(sid)
+
+        if token_groups_read:
+            group_sid_source = 'tokenGroups'
+        elif recursive_groups_read:
+            group_sid_source = 'recursive_group_membership'
+        elif primary_group_sid:
+            group_sid_source = 'primaryGroupID'
+        else:
+            group_sid_source = 'unavailable'
+
         return {
-            'status': 'unavailable',
-            'reason': 'authenticated account SID lookup failed: %s' % last_result,
-            'object_sid': None,
-            'effective_sids': [],
-            'token_groups_read': False,
+            'status': 'ok',
+            'reason': '',
+            'dn': self._display_dn(entry.entry_dn),
+            'sam_account_name': self._entry_value(entry, 'sAMAccountName') or self._username,
+            'object_sid': object_sid,
+            'effective_sids': effective_sids,
+            'effective_sid_count': len(effective_sids),
+            'token_groups_read': token_groups_read,
+            'group_sids_resolved': token_groups_read or recursive_groups_read,
+            'group_sid_source': group_sid_source,
         }
 
     def _bound_user_match_status(self, sid, current_user):
@@ -1372,9 +1425,61 @@ class DMSAForge:
         effective_sids = set(current_user.get('effective_sids') or [])
         if sid in effective_sids:
             return 'yes'
-        if current_user.get('token_groups_read'):
+        if current_user.get('group_sids_resolved') or current_user.get('token_groups_read'):
             return 'no'
         return 'unknown'
+
+    def _lookup_token_group_sids(self, ldap_connection, account_dn):
+        try:
+            success = ldap_connection.search(
+                search_base=str(account_dn),
+                search_filter='(objectSid=*)',
+                search_scope=LDAP_BASE,
+                attributes=['tokenGroups'],
+            )
+            if not success or not ldap_connection.entries:
+                return [], False
+            entry = ldap_connection.entries[0]
+            if 'tokenGroups' not in entry:
+                return [], False
+            return self._entry_sid_values(entry, 'tokenGroups'), True
+        except Exception as e:
+            logging.debug('Could not read tokenGroups for %s: %s' % (self._display_dn(account_dn), e))
+            return [], False
+
+    def _lookup_recursive_group_sids(self, ldap_connection, account_dn):
+        try:
+            escaped_dn = self._escape_filter_value(account_dn)
+            search_filter = '(&(objectClass=group)(objectSid=*)(member:1.2.840.113556.1.4.1941:=%s))' % escaped_dn
+            success = ldap_connection.search(
+                search_base=self._base_dn,
+                search_filter=search_filter,
+                search_scope=LDAP_SUBTREE,
+                attributes=['objectSid', 'sAMAccountName', 'distinguishedName', 'objectClass'],
+            )
+            if not success:
+                return [], False
+            group_sids = []
+            for entry in ldap_connection.entries:
+                for sid in self._entry_sid_values(entry, 'objectSid'):
+                    if sid not in group_sids:
+                        group_sids.append(sid)
+            return group_sids, True
+        except Exception as e:
+            logging.debug('Could not read recursive group membership for %s: %s' % (self._display_dn(account_dn), e))
+            return [], False
+
+    def _primary_group_sid(self, object_sid, primary_group_id):
+        if not object_sid or primary_group_id in (None, ''):
+            return None
+        try:
+            rid = int(str(primary_group_id))
+        except (TypeError, ValueError):
+            return None
+        parts = str(object_sid).split('-')
+        if len(parts) < 2:
+            return None
+        return '%s-%d' % ('-'.join(parts[:-1]), rid)
 
 
     def generate_dmsa_name(self):
@@ -1937,8 +2042,11 @@ class DMSAForge:
                     errors.append('sAMAccountName expected %s but got %s' % (expected_sam, sam))
                 if str(dns).lower() != str(expected_dns).lower():
                     errors.append('dNSHostName expected %s but got %s' % (expected_dns, dns))
-                if str(state) != '2':
-                    errors.append('msDS-DelegatedMSAState expected 2 but got %s' % state)
+                if str(state) != DMSA_EXPECTED_DELEGATED_STATE:
+                    errors.append('msDS-DelegatedMSAState expected %s but got %s' % (
+                        format_dmsa_delegated_state(DMSA_EXPECTED_DELEGATED_STATE),
+                        format_dmsa_delegated_state(state),
+                    ))
                 if not self._dn_equal(predecessor, expected_target_dn):
                     errors.append('msDS-ManagedAccountPrecededByLink expected %s but got %s' % (self._display_dn(expected_target_dn), self._display_dn(predecessor)))
                 if membership in (None, b'', ''):
@@ -1956,7 +2064,7 @@ class DMSAForge:
                     logging.info('%-30s %s' % ('Verified sAMAccountName:', sam))
                     logging.info('%-30s %s' % ('Verified DNS Hostname:', dns))
                     logging.info('%-30s %s' % ('Verified Target DN:', self._display_dn(predecessor)))
-                    logging.info('%-30s %s' % ('Verified MSA State:', state))
+                    logging.info('%-30s %s' % ('Verified MSA State:', format_dmsa_delegated_state(state)))
                     membership_lines = self._display_security_descriptor_summary_lines(membership)
                     logging.info('%-30s %s' % ('Verified MSA Membership:', membership_lines[0]))
                     for line in membership_lines[1:]:
@@ -2129,7 +2237,7 @@ class DMSAForge:
             logging.info("%-30s %s" % ("-" * 30, "-" * 30))
             logging.info("%-30s %s" % ("dMSA Name:", '%s$' % self._dmsa_name))
             logging.info("%-30s %s" % ("DNS Hostname:", attributes.get('dNSHostName', 'Unknown')))
-            logging.info("%-30s %s" % ("Migration status: ", attributes.get('msDS-DelegatedMSAState', 'Unknown')))
+            logging.info("%-30s %s" % ("Migration status:", format_dmsa_delegated_state(attributes.get('msDS-DelegatedMSAState'))))
             logging.info("%-30s %s" % ("Principals Allowed:", self._display_value(principals_allowed)))
             logging.info("%-30s %s" % ("Principals Allowed SID:", user_sid))
             logging.info("%-30s %s" % ("Target Account:", self._display_value(target_account)))
@@ -2160,6 +2268,8 @@ class DMSAForge:
                 add_request='SUCCESS' if success else 'FAILED',
                 post_add_verification='SUCCESS' if verified else 'FAILED',
                 verification_errors=[] if verified else getattr(self, '_last_verification_errors', []),
+                msa_state=attributes.get('msDS-DelegatedMSAState'),
+                msa_state_label=format_dmsa_delegated_state(attributes.get('msDS-DelegatedMSAState')),
                 kerberos_guidance=kerberos_guidance,
             )
             return verified
@@ -2254,7 +2364,7 @@ class DMSAForge:
             logging.info('%-30s %s' % ('Verified sAMAccountName:', sam))
             logging.info('%-30s %s' % ('Verified DNS Hostname:', dns))
             logging.info('%-30s %s' % ('Verified Target DN:', self._display_dn(predecessor)))
-            logging.info('%-30s %s' % ('Verified MSA State:', state))
+            logging.info('%-30s %s' % ('Verified MSA State:', format_dmsa_delegated_state(state)))
 
             membership_lines = self._display_security_descriptor_summary_lines(membership)
             logging.info('%-30s %s' % ('Verified MSA Membership:', membership_lines[0]))
@@ -2264,8 +2374,8 @@ class DMSAForge:
             errors = []
             if str(sam).lower() != ('%s$' % self._dmsa_name).lower():
                 errors.append('sAMAccountName does not match %s$' % self._dmsa_name)
-            if str(state) != '2':
-                errors.append('msDS-DelegatedMSAState is not 2')
+            if str(state) != DMSA_EXPECTED_DELEGATED_STATE:
+                errors.append('msDS-DelegatedMSAState is not %s' % format_dmsa_delegated_state(DMSA_EXPECTED_DELEGATED_STATE))
             if not predecessor:
                 errors.append('msDS-ManagedAccountPrecededByLink is missing')
             if membership in (None, b'', ''):
@@ -2296,6 +2406,7 @@ class DMSAForge:
                 dns_hostname=dns,
                 target_dn=self._display_dn(predecessor),
                 msa_state=state,
+                msa_state_label=format_dmsa_delegated_state(state),
                 verification='SUCCESS',
                 kerberos_guidance=kerberos_guidance,
             )
@@ -2994,7 +3105,7 @@ def auto_dc_ip_rejection_reason(value):
     except ValueError:
         return 'not an IPv4 address'
     if address.is_multicast:
-        return 'multicast/proxy-DNS placeholder'
+        return 'multicast address'
     if address.is_loopback:
         return 'loopback'
     if address.is_link_local:
@@ -3067,7 +3178,7 @@ def kerberos_guidance_lines(domain, username, password, dmsa_name, dc_host=None,
     ticket_path = ticket_name_for_user(username)
     dc_hint = 'Use /dc:%s as an IPv4 address to avoid IPv6 link-local resolution.' % dc_ipv4
     if dc_ipv4 == '<DC_IPV4>':
-        dc_hint = 'Pass --dc-ip with the real DC IPv4 before using these Kerberos commands.'
+        dc_hint = 'Set --dc-ip to a specific DC IPv4 before using these Kerberos commands.'
     return [
         'Next Kerberos step must be verified outside this script.',
         dc_hint,
@@ -3973,7 +4084,7 @@ def planned_bad_successor_values(options, report):
         ('dNSHostName', dns_hostname, 'dns_hostname'),
         ('userAccountControl', '4096', None),
         ('msDS-ManagedPasswordInterval', '30', None),
-        ('msDS-DelegatedMSAState', '2', None),
+        ('msDS-DelegatedMSAState', format_dmsa_delegated_state(DMSA_EXPECTED_DELEGATED_STATE), None),
         ('msDS-SupportedEncryptionTypes', '28', None),
         ('accountExpires', '9223372036854775807', None),
         ('msDS-GroupMSAMembership', membership, 'principals_allowed'),
@@ -4028,7 +4139,7 @@ def print_dry_run_plan(options, report=None):
     if report.get('inference') and options.debug:
         logging.info('Auto decisions:')
         for event in report['inference']:
-            logging.info('  - %s: %s (%s)' % (event.get('kind'), event.get('status'), event.get('detail')))
+            logging.info('  - %s: %s - %s' % (event.get('kind'), event.get('status'), event.get('detail')))
     print_action_plan_summary(options, report)
     return report
 
@@ -4060,7 +4171,7 @@ def report_to_text(report):
     if inference:
         lines.append('inference:')
         for event in inference:
-            lines.append('  - %s: %s (%s)' % (event.get('kind'), event.get('status'), event.get('detail')))
+            lines.append('  - %s: %s - %s' % (event.get('kind'), event.get('status'), event.get('detail')))
     operations = report.get('ldap_operations') or []
     if operations:
         lines.append('ldap_operations:')
@@ -4548,11 +4659,35 @@ def configure_logging(options):
     if logger is not None:
         logger.init(options.ts, options.debug)
         logging.getLogger().setLevel(logging.DEBUG if options.debug else (logging.WARNING if options.quiet else logging.INFO))
+        install_terminal_log_colors(options)
         return
 
     level = logging.DEBUG if options.debug else (logging.WARNING if options.quiet else logging.INFO)
     fmt = '%(asctime)s %(levelname)s: %(message)s' if options.ts else '%(levelname)s: %(message)s'
-    logging.basicConfig(level=level, format=fmt)
+    logging.basicConfig(level=level, format=fmt, stream=sys.stderr)
+    install_terminal_log_colors(options)
+
+
+def install_terminal_log_colors(options):
+    if not should_colorize_logs(options):
+        return
+    for handler in logging.getLogger().handlers:
+        stream = getattr(handler, 'stream', sys.stderr)
+        if not getattr(stream, 'isatty', lambda: False)():
+            continue
+        if isinstance(handler.formatter, TerminalColorFormatter):
+            continue
+        handler.setFormatter(TerminalColorFormatter(handler.formatter))
+
+
+def should_colorize_logs(options):
+    if os.environ.get('NO_COLOR') is not None:
+        return False
+    if getattr(options, 'json', False) or getattr(options, 'output_only', False):
+        return False
+    if getattr(options, 'quiet', False):
+        return False
+    return bool(getattr(sys.stderr, 'isatty', lambda: False)())
 
 
 def missing_runtime_dependencies():
@@ -5144,7 +5279,8 @@ def run_update(options):
 
         if not options.quiet:
             sys.stdout.write('Current version: %s\n' % current_version)
-            sys.stdout.write('Target version:  %s (%s)\n' % (target_version, version_source))
+            sys.stdout.write('Target version:  %s\n' % target_version)
+            sys.stdout.write('Version source:  %s\n' % version_source)
 
         if update_versions_match(current_version, target_version):
             if not options.quiet:

@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -156,6 +157,16 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertNotIn('Impacket', banner)
         self.assertNotIn('SecureAuth', banner)
         self.assertNotIn('Fortra', banner)
+
+    def test_terminal_color_formatter_colors_warning_and_error_only(self):
+        formatter = cli.TerminalColorFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+        info_record = logging.LogRecord('test', logging.INFO, __file__, 1, 'info sample', (), None)
+        warning_record = logging.LogRecord('test', logging.WARNING, __file__, 1, 'warning sample', (), None)
+        error_record = logging.LogRecord('test', logging.ERROR, __file__, 1, 'error sample', (), None)
+
+        self.assertEqual(formatter.format(info_record), 'INFO: info sample')
+        self.assertEqual(formatter.format(warning_record), '%sWARNING: warning sample%s' % (cli.ANSI_YELLOW, cli.ANSI_RESET))
+        self.assertEqual(formatter.format(error_record), '%sERROR: error sample%s' % (cli.ANSI_RED, cli.ANSI_RESET))
 
     def test_existence_check_treats_no_such_object_as_absent(self):
         forge = minimal_forge()
@@ -399,6 +410,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertIn('Current version:', result.stdout)
         self.assertIn('Target version:  v0.5.3', result.stdout)
+        self.assertIn('Version source:', result.stdout)
         self.assertIn('Update command:', result.stdout)
         self.assertIn('-m pip install --upgrade', result.stdout)
         self.assertIn(source, result.stdout)
@@ -591,6 +603,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertIn('BadSuccessor values:', output)
         self.assertIn('msDS-GroupMSAMembership:', output)
         self.assertIn('allow S-1-5-21-1-2-3-1604', output)
+        self.assertIn('msDS-DelegatedMSAState:             2 - migration complete', output)
         self.assertIn('msDS-ManagedAccountPrecededByLink:', output)
         self.assertIn('CN=Administrator,CN=Users,DC=test,DC=local', output)
         self.assertIn('dNSHostName:                        redpen.test.local (inferred)', output)
@@ -736,7 +749,7 @@ class CLIBehaviorTests(unittest.TestCase):
         )
         joined = '\n'.join(lines)
 
-        self.assertIn('Pass --dc-ip with the real DC IPv4', joined)
+        self.assertIn('Set --dc-ip to a specific DC IPv4', joined)
         self.assertIn('/dc:<DC_IPV4>', joined)
         self.assertNotIn('/dc:224.0.0.1', joined)
 
@@ -807,7 +820,11 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertTrue(any(
             event['kind'] == 'dc_ip'
             and event['status'] == 'rejected'
-            and '224.0.0.1' in event['detail']
+            and event['detail'] == 'DNS resolved dc01.eighteen.htb to unusable address 224.0.0.1; pass --dc-ip to use a specific DC IPv4'
+            for event in forge.report['inference']
+        ))
+        self.assertFalse(any(
+            'proxy-DNS placeholder' in event['detail'] or 'Kerberos /dc guidance' in event['detail']
             for event in forge.report['inference']
         ))
 
@@ -1721,19 +1738,27 @@ class CLIBehaviorTests(unittest.TestCase):
                         )
                     ]
                     return True
-                if attributes and 'tokenGroups' in attributes:
+                if search_filter and 'sAMAccountName=adam.scott' in search_filter:
                     self.entries = [
                         cli._LDAPEntry(
                             'CN=adam.scott,OU=Staff,DC=test,DC=local',
                             {
                                 'objectClass': ['top', 'person', 'user'],
                                 'objectSid': [user_sid],
-                                'tokenGroups': [group_sid],
+                                'primaryGroupID': ['513'],
                                 'sAMAccountName': ['adam.scott'],
                                 'cn': ['adam.scott'],
                                 'name': ['adam.scott'],
                                 'userPrincipalName': ['adam.scott@test.local'],
                             },
+                        )
+                    ]
+                    return True
+                if search_base == 'CN=adam.scott,OU=Staff,DC=test,DC=local' and attributes and 'tokenGroups' in attributes:
+                    self.entries = [
+                        cli._LDAPEntry(
+                            'CN=adam.scott,OU=Staff,DC=test,DC=local',
+                            {'tokenGroups': [group_sid]},
                         )
                     ]
                     return True
@@ -1796,10 +1821,153 @@ class CLIBehaviorTests(unittest.TestCase):
 
         self.assertTrue(success)
         self.assertEqual(forge.report['result']['bound_user']['status'], 'ok')
+        self.assertTrue(forge.report['result']['bound_user']['token_groups_read'])
+        self.assertEqual(forge.report['result']['bound_user']['group_sid_source'], 'tokenGroups')
         self.assertEqual(forge.report['result']['bound_user_match_count'], 1)
         self.assertEqual(forge.report['result']['identities'][0]['sid'], group_sid)
         self.assertEqual(forge.report['result']['identities'][0]['applies_to_bound_user'], 'yes')
         self.assertEqual(forge.report['result']['_next_step_candidates'][0]['identity'], group_sid)
+
+    def test_search_marks_rights_that_apply_to_bound_user_recursive_groups(self):
+        group_sid = 'S-1-5-21-1-2-3-1604'
+        user_sid = 'S-1-5-21-1-2-3-1101'
+
+        forge = minimal_forge()
+        forge._username = 'adam.scott'
+        forge._domain = 'test.local'
+        forge._search_summary = False
+        forge._search_include_sd = True
+        forge._search_resolve_names = False
+        forge._skip_dc_prereq = True
+        forge._target_ou = 'OU=Staff,DC=test,DC=local'
+        forge._options = execution_options(target_ou='OU=Staff,DC=test,DC=local', include_sd=True)
+
+        class CurrentUserRecursiveGroupConnection:
+            def __init__(self):
+                self.bound = True
+                self.entries = []
+                self.result = {'result': 0, 'description': 'success', 'message': ''}
+
+            def search(self, search_base=None, search_filter=None, attributes=None, **kwargs):
+                if search_filter == '(objectClass=organizationalUnit)':
+                    self.entries = [
+                        cli._LDAPEntry(
+                            'OU=Staff,DC=test,DC=local',
+                            {
+                                'distinguishedName': ['OU=Staff,DC=test,DC=local'],
+                                'nTSecurityDescriptor': [b'fake-sd'],
+                            },
+                        )
+                    ]
+                    return True
+                if search_filter == '(objectClass=domain)':
+                    self.entries = [
+                        cli._LDAPEntry(
+                            'DC=test,DC=local',
+                            {'objectSid': ['S-1-5-21-1-2-3']},
+                        )
+                    ]
+                    return True
+                if search_filter and 'sAMAccountName=adam.scott' in search_filter:
+                    self.entries = [
+                        cli._LDAPEntry(
+                            'CN=adam.scott,OU=Staff,DC=test,DC=local',
+                            {
+                                'objectClass': ['top', 'person', 'user'],
+                                'objectSid': [user_sid],
+                                'primaryGroupID': ['513'],
+                                'sAMAccountName': ['adam.scott'],
+                                'cn': ['adam.scott'],
+                                'name': ['adam.scott'],
+                                'userPrincipalName': ['adam.scott@test.local'],
+                            },
+                        )
+                    ]
+                    return True
+                if search_base == 'CN=adam.scott,OU=Staff,DC=test,DC=local' and attributes and 'tokenGroups' in attributes:
+                    self.entries = [
+                        cli._LDAPEntry(
+                            'CN=adam.scott,OU=Staff,DC=test,DC=local',
+                            {'objectSid': [user_sid]},
+                        )
+                    ]
+                    return True
+                if search_filter and 'member:1.2.840.113556.1.4.1941:=' in search_filter:
+                    self.entries = [
+                        cli._LDAPEntry(
+                            'CN=Delegated dMSA Writers,OU=Staff,DC=test,DC=local',
+                            {
+                                'objectClass': ['top', 'group'],
+                                'objectSid': [group_sid],
+                                'sAMAccountName': ['Delegated dMSA Writers'],
+                            },
+                        )
+                    ]
+                    return True
+                self.entries = []
+                return True
+
+        class FakeSid:
+            def __init__(self, sid):
+                self.sid = sid
+
+            def formatCanonical(self):
+                return self.sid
+
+        class FakeMask:
+            def __getitem__(self, key):
+                if key == 'Mask':
+                    return 0x10000000
+                raise KeyError(key)
+
+        class FakeAceData:
+            def __getitem__(self, key):
+                if key == 'Mask':
+                    return FakeMask()
+                if key == 'Sid':
+                    return FakeSid(group_sid)
+                raise KeyError(key)
+
+        class FakeAce:
+            def __getitem__(self, key):
+                if key == 'AceType':
+                    return 0
+                if key == 'Ace':
+                    return FakeAceData()
+                raise KeyError(key)
+
+        class FakeDacl:
+            aces = [FakeAce()]
+
+        class FakeSD:
+            def __init__(self, data=None):
+                pass
+
+            def __getitem__(self, key):
+                if key == 'Dacl':
+                    return FakeDacl()
+                if key == 'OwnerSid':
+                    return FakeSid(group_sid)
+                raise KeyError(key)
+
+        original_ldaptypes = cli.ldaptypes
+        try:
+            cli.ldaptypes = types.SimpleNamespace(
+                SR_SECURITY_DESCRIPTOR=FakeSD,
+                ACCESS_ALLOWED_ACE=types.SimpleNamespace(ACE_TYPE=0),
+            )
+            with contextlib.redirect_stderr(io.StringIO()):
+                success = forge.search_ous(CurrentUserRecursiveGroupConnection())
+        finally:
+            cli.ldaptypes = original_ldaptypes
+
+        self.assertTrue(success)
+        self.assertEqual(forge.report['result']['bound_user']['status'], 'ok')
+        self.assertFalse(forge.report['result']['bound_user']['token_groups_read'])
+        self.assertTrue(forge.report['result']['bound_user']['group_sids_resolved'])
+        self.assertEqual(forge.report['result']['bound_user']['group_sid_source'], 'recursive_group_membership')
+        self.assertEqual(forge.report['result']['bound_user_match_count'], 1)
+        self.assertEqual(forge.report['result']['identities'][0]['applies_to_bound_user'], 'yes')
 
     def test_search_falls_back_to_authenticated_account_ou_when_broad_ou_search_fails(self):
         class FallbackConnection:
