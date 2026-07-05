@@ -1,12 +1,12 @@
 # dMSA Forge
 
-[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.4)
+[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.5)
 [![Tests](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml/badge.svg)](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Impacket%20Apache--1.1-blue)](https://github.com/RedteamNotes/dmsa-forge/blob/main/LICENSE)
 
 **Language:** English | [简体中文](assets/README.zh-CN.md) | [Français](assets/README.fr.md)
 
-Current release: `v0.5.4`
+Current release: `v0.5.5`
 
 A [dMSA](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview) forge for authorized [BadSuccessor](https://www.akamai.com/blog/security-research/abusing-dmsa-for-privilege-escalation-in-active-directory) LDAP workflows: add, verify, delete, and search.
 
@@ -28,7 +28,7 @@ Use only in environments where you have explicit authorization.
 - Verifies the object by reading it back from the DC after add.
 - Parses `msDS-GroupMSAMembership` as a binary security descriptor and prints a readable summary instead of raw bytes.
 - Adds `verify` as a read-only action.
-- Modernizes the operator experience with task-named commands, shorter contextual help, local profiles, inferred defaults, diagnostics, next-step suggestions, and shell completion.
+- Modernizes the operator experience with task-named commands, concise contextual help, inferred defaults, next-step suggestions, and structured reports.
 - Adds safer preflight and reporting workflows: dry-run plans, scope guardrails, redacted structured output, readiness checks, and clearer failure diagnostics.
 - Keeps output honest: LDAP verification success does not mean KDC readiness.
 
@@ -65,36 +65,26 @@ dmsa-forge update
 
 `update` compares the installed version with the target release first. If the versions match, it skips pip; if they differ, it updates regardless of whether the target version is higher or lower. Use `dmsa-forge update --force` only when you deliberately want to run pip without the version check.
 
-Helpful local help entry points:
+Useful help entry points:
 
 ```bash
-dmsa-forge actions
-dmsa-forge examples
 dmsa-forge add -h
 dmsa-forge add --help-advanced
 dmsa-forge update --dry-run
 ```
 
 For source-checkout use without installation, run `./dmsa-forge.py`.
-Task-named commands and modern `--long-option` flags are shown below. Legacy `--action ...` and original Impacket-style single-dash options, such as `-dc-host` and `-target-ou`, are still supported for compatibility. Do not combine task-named commands with `--action`.
+Task-named commands and modern `--long-option` flags are shown below.
 
 ## Quick Start
-
-Inspect local readiness before running LDAP workflows:
-
-```bash
-dmsa-forge doctor eighteen.htb/adam.scott
-```
-
-Use `dmsa-forge doctor --kerberos` to require local Kerberos cache checks, including `KRB5CCNAME`, cache readability, cache parsing, and realm alignment. It does not contact the KDC.
 
 Preview an add with the safe profile. Commands in this README are intentionally shown as one-line, copy-ready examples; if you use a local wrapper such as `proxychains -f chain1080.conf -q`, place it before `dmsa-forge`.
 
 ```bash
-dmsa-forge plan add eighteen.htb/adam.scott:'PASSWORD' --profile safe --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account 'CN=Administrator,CN=Users,DC=eighteen,DC=htb'
+dmsa-forge plan add eighteen.htb/adam.scott:'PASSWORD' --profile safe --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --principals-allowed '<SID_OR_NAME>'
 ```
 
-By default, `DOMAIN/user` infers `--scope-domain`, `--scope-base-dn`, and `--base-dn`; LDAP/389 is the default method and port; `--dns-hostname` is inferred from `--dmsa-name` and the account domain. Use explicit flags when you need to override these values.
+By default, `DOMAIN/user` infers `--scope-domain`, `--scope-base-dn`, and `--base-dn`; LDAP/389 is the default method and port; `--target-account` defaults to `Administrator`; `--dns-hostname` is inferred from `--dmsa-name` and the account domain. Use explicit flags when you need to override these values.
 
 ## Operator Flow
 
@@ -109,13 +99,13 @@ dmsa-forge verify eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb
 Plan add:
 
 ```bash
-dmsa-forge plan add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --principals-allowed '<SID_OR_NAME>' --target-account 'CN=Administrator,CN=Users,DC=eighteen,DC=htb'
+dmsa-forge plan add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --principals-allowed '<SID_OR_NAME>'
 ```
 
 Add:
 
 ```bash
-dmsa-forge add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --principals-allowed '<SID_OR_NAME>' --target-account 'CN=Administrator,CN=Users,DC=eighteen,DC=htb'
+dmsa-forge add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --principals-allowed '<SID_OR_NAME>'
 ```
 
 Post-add verify:
@@ -130,19 +120,18 @@ Delete when finished:
 dmsa-forge delete eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --yes
 ```
 
-After a verified `add` or `verify`, `Next steps` includes concrete external Kerberos commands. Use `--kerberos-guidance` only when you want the same commands printed inline with the verification block.
+After a verified `add` or `verify`, `Next steps` includes concrete external Kerberos commands. The generated flow starts with `Rubeus hash`, then uses the printed AES256 value for `asktgt`, then runs the dMSA `asktgs` request.
 
-Target account resolution is LDAP-search based and `--target-account` is explicit for `add`. For the built-in `Administrator` account, the full DN is the most deterministic form; short names are resolved through exact LDAP matches and logged exact-DN candidates.
+Target account resolution is LDAP-search based. `add` defaults `--target-account` to `Administrator`; pass a different sAMAccountName or DN when the authorized workflow targets another account.
 
 Safety controls:
 
 - Use `dmsa-forge plan ACTION ...`, `--dry-run`, or `--plan` to validate options and print the planned LDAP operations without opening an LDAP connection.
-- Use `dmsa-forge doctor` for a concise local readiness report; text output shows only warnings/errors while JSON keeps the full check set.
 - Use `--profile safe` for a redacted dry-run preset, `--profile report` for JSON reports, or `--profile ci` for quiet JSON/no-banner output.
 - `DOMAIN/user` infers `--scope-domain`, `--scope-base-dn`, and `--base-dn`; a valid `--scope-base-dn` can also supply the default base DN. Override with explicit flags when the authorized scope differs.
 - LDAP/389 is tried first when `--method` and `--port` are omitted. If that connection fails, dMSA Forge can try LDAPS/636 and records the attempted candidates in terminal output and JSON/text reports. A lone `--port 636` infers LDAPS; pin both `--method` and `--port` to require an exact pair.
 - `--dns-hostname` defaults to `<dmsa-name>.<account-domain>` when `--dmsa-name` is set.
-- Use `--dc-host` for a specific DC hostname and `--dc-ip` only when DNS or routing requires an IP override.
+- Use `--dc-host` for a specific DC hostname and `--dc-ip` only when DNS or routing requires an IP override. Automatic DC IP resolution never probes the network; multicast, loopback, link-local, unspecified, broadcast, and reserved DNS results are rejected so proxy DNS placeholders such as `224.0.0.1` do not become Kerberos `/dc:` values.
 - For `search`, `--target-ou` narrows the OU search base. The Domain Controller prerequisite check is best-effort; if it fails, the OU search continues and records a warning.
 - Target account and `--principals-allowed` name resolution prefer exact `sAMAccountName`/UPN/CN matches. Ambiguous LDAP results fail closed with a prompt to pass a full DN or SID.
 - `delete` requires `--yes`. The old `modify` workflow has been removed; use `delete`, `add`, and `verify` instead.
@@ -158,9 +147,10 @@ Structured JSON reports include `schema_version` so automation can pin parsing b
 Search modes:
 
 - `search` defaults to OU security descriptor analysis.
+- Search results list principals with BadSuccessor-relevant OU rights, namely principals that can create dMSA objects or control the listed OUs. The tool also compares those SIDs with the bound account's `objectSid` and `tokenGroups` and marks whether each row applies to the current bind; if `tokenGroups` is unavailable, group-grant matches are reported as `unknown`.
 - Use `--summary` for a lightweight OU-only listing. `--include-security-descriptor` and `--include-sd` remain accepted explicit aliases for the default analysis mode.
 - Add `--resolve-names` to resolve matching SIDs to names.
-- Use `--minimal` to avoid broad search analysis, name resolution, and Kerberos guidance.
+- Use `--minimal` to avoid broad search analysis, name resolution, and extra Kerberos command output.
 - Add `--skip-dc-prereq` for `search` to skip the prerequisite Domain Controller OS check.
 
 Advanced and compatibility details live in [assets/advanced.md](assets/advanced.md).
