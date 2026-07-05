@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dmsa-forge"
+version = "0.5.4"
+description = "A redteaming tool for authorized BadSuccessor LDAP exploitation on dMSA: add, verify, delete, and search."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { file = "LICENSE" }
+authors = [
+  { name = "RedteamNotes" }
+]
+keywords = ["active-directory", "kerberos", "ldap", "impacket", "dmsa", "badsuccessor"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Information Technology",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Security",
+  "Topic :: System :: Systems Administration :: Authentication/Directory",
+]
+dependencies = [
+  "impacket",
+  "pyasn1",
+]
+
+[project.urls]
+Homepage = "https://github.com/RedteamNotes/dmsa-forge"
+Repository = "https://github.com/RedteamNotes/dmsa-forge"
+Issues = "https://github.com/RedteamNotes/dmsa-forge/issues"
+
+[project.scripts]
+dmsa-forge = "dmsa_forge.cli:main"
+dmsaforge = "dmsa_forge.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dmsa_forge*"]
