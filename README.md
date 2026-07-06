@@ -1,12 +1,12 @@
 # dMSA Forge
 
-[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.16)
+[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.17)
 [![Tests](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml/badge.svg)](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Impacket%20Apache--1.1-blue)](https://github.com/RedteamNotes/dmsa-forge/blob/main/LICENSE)
 
 **Language:** English | [简体中文](assets/README.zh-CN.md) | [Français](assets/README.fr.md)
 
-Current release: `v0.5.16`
+Current release: `v0.5.17`
 
 A [dMSA](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview) forge for authorized [BadSuccessor](https://www.akamai.com/blog/security-research/abusing-dmsa-for-privilege-escalation-in-active-directory) LDAP workflows: assess, add, verify, and delete.
 
@@ -135,6 +135,7 @@ Safety controls:
 - Use `--profile safe` for a redacted dry-run preset, `--profile report` for JSON reports, or `--profile ci` for quiet JSON/no-banner output.
 - `DOMAIN/user` infers `--scope-domain`, `--scope-base-dn`, and `--base-dn`; a valid `--scope-base-dn` can also supply the default base DN. Override with explicit flags when the authorized scope differs.
 - LDAP/389 is tried first when `--method` and `--port` are omitted. If that connection fails, dMSA Forge can try LDAPS/636 and records the attempted candidates in terminal output and JSON/text reports. A lone `--port 636` infers LDAPS; pin both method and port to require an exact pair.
+- LDAP operations use a default 30-second socket timeout. Override with `--timeout SECONDS` only when the authorized network path requires it.
 - `--dns-hostname` defaults to `<dmsa-name>.<account-domain>` when `--dmsa-name` is set.
 - Use `--dc-host` for a specific DC hostname and `--dc-ip` only when DNS or routing requires an IP override. Automatic DC IP resolution never probes the network; multicast, loopback, link-local, unspecified, broadcast, and reserved DNS results are rejected so proxy DNS placeholders such as `224.0.0.1` do not become Kerberos `/dc:` values.
 - For `assess`, `--ou` narrows the OU assessment base. The Domain Controller prerequisite check is best-effort; if it fails, the OU assessment continues and records a warning.

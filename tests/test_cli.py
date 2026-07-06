@@ -360,6 +360,8 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertNotIn(', -method', result.stdout)
         self.assertNotIn('--allow-admin-fallback', result.stdout)
         self.assertNotIn('--next-step-prefix', result.stdout)
+        self.assertNotIn('--no-banner', result.stdout)
+        self.assertNotIn('--timeout', result.stdout)
         self.assertIn('More information: %s    Email: 888256@gmail.com' % cli.PROJECT_URL, result.stdout)
         self.assertLess(result.stdout.index('positional arguments:'), result.stdout.index('main:'))
         self.assertLess(result.stdout.index('main:'), result.stdout.index('LDAP:'))
@@ -421,6 +423,14 @@ class CLIBehaviorTests(unittest.TestCase):
                 self.assertIn('[domain/]username[:password]', result.stdout)
                 self.assertEqual(result.stderr, '')
 
+    def test_empty_action_with_no_banner_still_prints_action_help(self):
+        result = run_cli('assess', '--no-banner')
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('usage: dmsaforge assess', result.stdout)
+        self.assertNotIn('--no-banner', result.stdout)
+        self.assertEqual(result.stderr, '')
+
     def test_single_dash_long_options_are_rejected(self):
         result = run_cli('add', '-dc-host', 'dc.test.local', '--no-banner')
 
@@ -476,6 +486,22 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(payload['action'], 'add')
         self.assertEqual(payload['mode'], 'dry_run')
         self.assertTrue(payload['controls']['dry_run'])
+        self.assertEqual(payload['controls']['timeout'], cli.DEFAULT_LDAP_TIMEOUT)
+
+    def test_explicit_timeout_is_supported_and_preserved_in_next_steps(self):
+        result = run_cli(
+            'plan',
+            'add',
+            *BASE_ARGS,
+            '--timeout',
+            '12.5',
+            '--output-only',
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload['controls']['timeout'], 12.5)
+        self.assertIn('--timeout 12.5', payload['result']['next_steps'][0]['command'])
 
     def test_completion_script_hidden_flag_outputs_shell_snippets(self):
         zsh = run_cli('--completion-script', 'zsh')
@@ -2618,10 +2644,14 @@ class CLIBehaviorTests(unittest.TestCase):
 
     def test_ldap_compat_does_not_append_port_to_impacket_url(self):
         captured = []
+        timeouts = []
 
         class FakeConnection:
             def __init__(self, url, baseDN='', dstIp=None, signing=True):
                 captured.append((url, baseDN, dstIp, signing))
+
+            def settimeout(self, value):
+                timeouts.append(value)
 
             def login(self, *args, **kwargs):
                 return None
@@ -2643,12 +2673,64 @@ class CLIBehaviorTests(unittest.TestCase):
                 use_ldaps=False,
                 kdc_host=None,
                 port=389,
+                timeout=12.5,
             )
         finally:
             cli.impacket_ldap = original
 
         self.assertEqual(captured[0][0], 'ldap://dc01.test.local')
         self.assertEqual(captured[0][2], None)
+        self.assertIn(12.5, timeouts)
+
+    def test_verify_warns_instead_of_failing_on_expected_reader_sid_mismatch(self):
+        if cli.ldaptypes is None:
+            self.skipTest('impacket ldaptypes unavailable')
+
+        actual_sid = 'S-1-5-21-1-2-3-1609'
+        expected_sid = 'S-1-5-21-1-2-3-1604'
+        options = execution_options(
+            action='verify',
+            account='test.local/adam.scott:pw',
+            target_ou='OU=Staff,DC=test,DC=local',
+            dmsa_name='redpen',
+            principals_allowed=expected_sid,
+        )
+        forge = cli.DMSAForge('adam.scott', 'pw', 'test.local', '', '', options)
+        membership = forge.build_security_descriptor(actual_sid)
+
+        class ExistingDMSAConnection:
+            def __init__(self):
+                self.entries = []
+                self.result = {'result': 0, 'description': 'success', 'message': ''}
+
+            def search(self, search_base=None, search_filter=None, **kwargs):
+                self.entries = [
+                    cli._LDAPEntry(
+                        'CN=redpen,OU=Staff,DC=test,DC=local',
+                        {
+                            'sAMAccountName': ['redpen$'],
+                            'dNSHostName': ['redpen.test.local'],
+                            'msDS-DelegatedMSAState': ['2'],
+                            'msDS-ManagedAccountPrecededByLink': ['CN=Administrator,CN=Users,DC=test,DC=local'],
+                            'msDS-GroupMSAMembership': [membership],
+                        },
+                    )
+                ]
+                return True
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            success = forge.verify_dmsa(ExistingDMSAConnection())
+
+        self.assertTrue(success)
+        result = forge.report['result']
+        self.assertEqual(result['verification'], 'SUCCESS_WITH_WARNINGS')
+        self.assertEqual(result['expected_reader_sid'], expected_sid)
+        self.assertTrue(result['warnings'])
+        self.assertEqual(
+            result['badsuccessor_attributes']['msDS-GroupMSAMembership']['expected_reader_sid_present'],
+            False,
+        )
+        self.assertTrue(any('sid=%s' % actual_sid in line for line in result['membership_summary']))
 
     def test_output_file_rejects_symlink_when_supported(self):
         if not hasattr(os, 'O_NOFOLLOW'):

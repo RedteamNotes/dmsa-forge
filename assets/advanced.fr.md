@@ -24,6 +24,7 @@ dMSA Forge garde l'état d'exécution visible dans la ligne de commande et ne ch
 - Quand ni la méthode ni le port ne sont explicites, l'exécution tente d'abord LDAP/389 et peut tenter LDAPS/636 seulement si la première connexion échoue.
 - Un `--port 636` seul infère `LDAPS` ; un `--port 389` seul infère `LDAP`.
 - `--method LDAPS` utilise le port `636` par défaut ; définir explicitement l'une des options de connexion désactive l'essai method/port.
+- Les opérations LDAP utilisent un timeout socket par défaut de 30 secondes. Utilisez `--timeout SECONDS` pour les chemins réseau lents mais attendus.
 - Pour l'exécution réelle de `add`, `--target-account` est requis et définit le DN écrit dans `msDS-ManagedAccountPrecededByLink`.
 - `--dns-hostname` vaut `<dmsa-name>.<account-domain>` lorsque `--dmsa-name` est défini.
 - Pour l'exécution réelle de `add`, `--principals-allowed` est requis et définit le SID écrit dans `msDS-GroupMSAMembership`.

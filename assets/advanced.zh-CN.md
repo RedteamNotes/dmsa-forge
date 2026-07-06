@@ -24,6 +24,7 @@ dMSA Forge 保持运行状态都体现在命令行中，不加载项目配置文
 - 未显式传 method 和 port 时，执行阶段会先尝试 LDAP/389；如果连接失败，才会继续尝试 LDAPS/636。
 - 单独传 `--port 636` 会推断 `LDAPS`；单独传 `--port 389` 会推断 `LDAP`。
 - `--method LDAPS` 默认使用端口 `636`；只要显式传了任一连接参数，就不会再做 method/port 试探。
+- LDAP 操作默认使用 30 秒 socket 超时。网络路径慢但属于预期时，可用 `--timeout SECONDS` 调整。
 - 对真实 `add` 执行来说，`--target-account` 必填，它决定写入 `msDS-ManagedAccountPrecededByLink` 的账号 DN。
 - 设置 `--dmsa-name` 后，`--dns-hostname` 默认是 `<dmsa-name>.<account-domain>`。
 - 对真实 `add` 执行来说，`--principals-allowed` 必填，它决定写入 `msDS-GroupMSAMembership` 的 SID。
