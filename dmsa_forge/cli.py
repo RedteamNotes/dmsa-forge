@@ -137,9 +137,15 @@ class TerminalColorFormatter(logging.Formatter):
         return text
 
 
-def log_section(title):
-    logging.info('')
-    logging.info('%s' % title)
+def log_section(title, leading_blank=True):
+    if leading_blank:
+        log_blank()
+    logging.info('%s:' % title)
+
+
+def log_blank():
+    if logging.getLogger().isEnabledFor(logging.INFO):
+        sys.stderr.write('\n')
 
 
 def log_kv(label, value, width=24):
@@ -604,7 +610,7 @@ class DMSAForge:
         }
 
     def _log_run_metadata(self, target_host, dc_ip):
-        log_section('Run context')
+        log_section('Run context', leading_blank=False)
         log_kv('Operation ID:', self._operation_id)
         log_kv('Action:', self._action)
         log_kv('Target DC:', dc_ip if dc_ip else target_host)
@@ -778,7 +784,7 @@ class DMSAForge:
                     self._record_inference(
                         'dc_ip',
                         'rejected',
-                        'DNS resolved %s to unusable address %s; pass --dc-ip to use a specific DC IPv4' % (
+                        '%s resolved to unusable %s; continuing without inferred --dc-ip' % (
                             target_host,
                             resolved_dc_ip,
                         ),
@@ -1149,7 +1155,7 @@ class DMSAForge:
                     }
 
                 log_section('Findings')
-                logging.info('Found %d identities with %s.' % (len(allowed_identities), BADSUCCESSOR_RIGHTS_LABEL))
+                logging.info('Assessment result: found %d identities with %s.' % (len(allowed_identities), BADSUCCESSOR_RIGHTS_LABEL))
                 logging.info('Rights evaluated: %s.' % BADSUCCESSOR_RIGHTS_MEANING)
                 if current_user.get('status') == 'ok':
                     matched_sids = [
@@ -1160,31 +1166,31 @@ class DMSAForge:
                     bound_account = current_user.get('sam_account_name') or getattr(self, '_username', None) or '(unknown)'
                     logging.info('Bound account: %s' % bound_account)
                     if matched_count:
-                        logging.info('Bound account has BadSuccessor-relevant rights on the listed OUs.')
+                        logging.info('Bound account %s has BadSuccessor-relevant rights on the listed OUs.' % bound_account)
                         for sid in matched_sids:
                             logging.info('Matched effective SID: %s - %s' % (sid, self._effective_sid_source_label(sid, current_user)))
                     elif current_user.get('group_sids_resolved') or current_user.get('token_groups_read'):
-                        logging.info('Bound account does not match the listed OU rights.')
+                        logging.info('Bound account %s does not match the listed OU rights.' % bound_account)
                     else:
-                        logging.info('Bound account rights could not be confirmed; group SID lookup did not return results.')
+                        logging.info('Bound account %s rights could not be confirmed; group SID lookup did not return results.' % bound_account)
                 else:
                     logging.info('Bound account rights could not be confirmed. %s' % current_user.get('reason', ''))
-                logging.info("")
-                logging.info("%-50s %-18s %s" % ("Identity", "Bound account", "OUs with relevant rights"))
-                logging.info("%-50s %-18s %s" % ("-" * 50, "-" * 18, "-" * 30))
+                log_blank()
+                logging.info("%-50s %-13s %s" % ("Identity", "Bound account", "OUs with relevant rights"))
+                logging.info("%-50s %-13s %s" % ("-" * 50, "-" * 13, "-" * 30))
 
                 for sid, item in allowed_identities.items():
                     identity = item['identity']
                     ous = item['ous']
                     ou_list = "{%s}" % ", ".join([self._display_dn(ou) for ou in ous])
-                    logging.info("%-50s %-18s %s" % (identity[:50], self._bound_user_match_display(sid, current_user), ou_list))
+                    logging.info("%-50s %-13s %s" % (identity[:50], self._bound_user_match_display(sid, current_user), ou_list))
             else:
                 log_section('Findings')
-                logging.info('No identities found with %s.' % BADSUCCESSOR_RIGHTS_LABEL)
-                logging.info("")
-                logging.info("%-50s %-18s %s" % ("Identity", "Bound account", "OUs with relevant rights"))
-                logging.info("%-50s %-18s %s" % ("-" * 50, "-" * 18, "-" * 30))
-                logging.info("%-50s %-18s %s" % ("(none)", "(none)", "(none)"))
+                logging.info('Assessment result: no identities found with %s.' % BADSUCCESSOR_RIGHTS_LABEL)
+                log_blank()
+                logging.info("%-50s %-13s %s" % ("Identity", "Bound account", "OUs with relevant rights"))
+                logging.info("%-50s %-13s %s" % ("-" * 50, "-" * 13, "-" * 30))
+                logging.info("%-50s %-13s %s" % ("(none)", "(none)", "(none)"))
             self._set_report_result(
                 mode='security_descriptor_analysis',
                 windows_server_2025_dc_found=prereq_flag,
@@ -1473,10 +1479,7 @@ class DMSAForge:
         return (current_user.get('effective_sid_sources') or {}).get(sid, 'unknown')
 
     def _bound_user_match_display(self, sid, current_user):
-        status = self._bound_user_match_status(sid, current_user)
-        if status == 'yes':
-            return 'yes, %s' % self._effective_sid_source_label(sid, current_user)
-        return status
+        return self._bound_user_match_status(sid, current_user)
 
     def _lookup_token_group_sids(self, ldap_connection, account_dn):
         try:
@@ -2302,8 +2305,9 @@ class DMSAForge:
                     logging.error('Use dmsa-forge verify ... to inspect it or dmsa-forge delete ... before adding a new object.')
                     self._set_report_failure('dmsa_already_exists', 'Object already exists.', dmsa_dn=self._display_dn(dmsa_dn), ldap_result=first_error)
                     return False
-                logging.info('DC rejected nTSecurityDescriptor in AddRequest: %s' % first_error)
-                logging.info('Retrying AddRequest without nTSecurityDescriptor; msDS-GroupMSAMembership remains in the AddRequest.')
+                logging.info('nTSecurityDescriptor was not accepted in AddRequest; retrying without it.')
+                logging.debug('nTSecurityDescriptor AddRequest result: %s' % first_error)
+                logging.info('msDS-GroupMSAMembership remains in the AddRequest.')
                 success = ldap_connection.add(dmsa_dn, attributes=attributes)
                 add_mode = 'without nTSecurityDescriptor'
 
@@ -2537,7 +2541,7 @@ ACTION_REQUIREMENTS = {
     'verify': (('dmsa_name', '--dmsa-name'), ('target_ou', '--target-ou')),
 }
 DESTRUCTIVE_ACTIONS = ('delete',)
-REMOVED_COMMANDS = ('init', 'config', 'guidance', 'modify', 'completion', 'actions', 'examples', 'help', 'search')
+REMOVED_COMMANDS = ('init', 'config', 'guidance', 'modify', 'completion', 'actions', 'examples', 'help')
 UTILITY_COMMANDS = ('plan', 'update')
 SUBCOMMAND_CHOICES = VISIBLE_ACTION_CHOICES + UTILITY_COMMANDS
 
@@ -2725,8 +2729,6 @@ def removed_command_message(command):
         return '"modify" was removed; use delete/add/verify. dMSA core attributes are created atomically during add.'
     if command == 'completion':
         return '"completion" was removed; use %s for current-session completion.' % completion_eval_hint()
-    if command == 'search':
-        return '"search" was removed; use "dmsa-forge assess ..." to evaluate BadSuccessor OU feasibility.'
     if command in ('actions', 'examples', 'help'):
         return '"%s" was removed; use "dmsa-forge -h" or "dmsa-forge ACTION -h".' % command
     return '"%s" is not available.' % command
@@ -5269,7 +5271,6 @@ def run_update(options):
         if update_versions_match(current_version, target_version):
             if not options.quiet:
                 sys.stdout.write('No update required; versions match.\n')
-                print_shell_collision_note()
             return 0
 
     command = build_update_command(options, target_version, version_source)
@@ -5302,20 +5303,10 @@ def run_update(options):
     if completed.returncode == 0:
         if not options.quiet:
             sys.stdout.write('\nUpdate completed. Run "dmsa-forge -v" to confirm the installed version.\n')
-            print_shell_collision_note()
         return 0
 
     sys.stderr.write('\nUpdate failed with exit code %s.\n' % completed.returncode)
     return completed.returncode
-
-
-def print_shell_collision_note():
-    if os.path.isdir(os.path.join(os.getcwd(), TOOL_NAME)):
-        sys.stdout.write(
-            'Shell note: current directory contains ./%s/. If bare "%s" changes directory in zsh, '
-            'run "command %s ..." or the equivalent alias "dmsaforge ...".\n'
-            % (TOOL_NAME, TOOL_NAME, TOOL_NAME)
-        )
 
 
 def completion_script(shell):
@@ -5423,7 +5414,7 @@ def _main(argv=None):
         parse_argv = list(argv)
     else:
         parser = build_subcommand_parser()
-        parser.error('Unknown action "%s". Use "dmsa-forge -h" to list available actions.' % argv[0])
+        parser.error('unrecognized action: %s' % argv[0])
 
     options = parser.parse_args(parse_argv)
     apply_option_defaults(options)

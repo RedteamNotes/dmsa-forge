@@ -221,8 +221,8 @@ class CLIBehaviorTests(unittest.TestCase):
         result = run_cli('test.local/admin:pw')
 
         self.assertEqual(result.returncode, 2)
-        self.assertIn('Unknown action "test.local/admin:pw"', result.stderr)
-        self.assertIn('dmsa-forge -h', result.stderr)
+        self.assertIn('unrecognized action: test.local/admin:pw', result.stderr)
+        self.assertNotIn('was removed', result.stderr)
 
     def test_global_help_is_grouped(self):
         result = run_cli('-h', env_overrides={'SHELL': '/bin/zsh'})
@@ -411,8 +411,8 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertIn('successful add/verify output includes Kerberos commands', guidance.stderr)
         self.assertIn('use delete/add/verify', modify.stderr)
         self.assertIn('--completion-script zsh', completion.stderr)
-        self.assertIn('"search" was removed', search.stderr)
-        self.assertIn('dmsa-forge assess', search.stderr)
+        self.assertIn('unrecognized action: search', search.stderr)
+        self.assertNotIn('was removed', search.stderr)
         self.assertIn('dmsa-forge ACTION -h', actions.stderr)
         self.assertIn('dmsa-forge ACTION -h', examples.stderr)
         self.assertIn('dmsa-forge ACTION -h', help_command.stderr)
@@ -441,24 +441,25 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertIn('No update required; versions match.', result.stdout)
         self.assertNotIn('Update command:', result.stdout)
 
-    def test_update_warns_when_cwd_contains_command_named_checkout(self):
+    def test_update_stays_quiet_when_cwd_contains_command_named_checkout(self):
         source = '%s@%s' % (cli.DEFAULT_UPDATE_SOURCE, cli.TOOL_VERSION)
         with tempfile.TemporaryDirectory() as tmpdir:
             os.mkdir(os.path.join(tmpdir, 'dmsa-forge'))
             result = run_cli('update', '--dry-run', '--no-banner', '--source', source, cwd=tmpdir)
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertIn('Shell note: current directory contains ./dmsa-forge/.', result.stdout)
-        self.assertIn('dmsaforge', result.stdout)
+        self.assertIn('No update required; versions match.', result.stdout)
+        self.assertNotIn('current directory contains', result.stdout)
+        self.assertNotIn('dmsaforge', result.stdout)
 
-    def test_update_quiet_suppresses_shell_collision_note(self):
+    def test_update_quiet_stays_quiet_when_cwd_contains_command_named_checkout(self):
         source = '%s@%s' % (cli.DEFAULT_UPDATE_SOURCE, cli.TOOL_VERSION)
         with tempfile.TemporaryDirectory() as tmpdir:
             os.mkdir(os.path.join(tmpdir, 'dmsa-forge'))
             result = run_cli('update', '--dry-run', '--no-banner', '--quiet', '--source', source, cwd=tmpdir)
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertNotIn('Shell note:', result.stdout)
+        self.assertNotIn('current directory contains', result.stdout)
 
     def test_update_unknown_source_requires_force(self):
         result = run_cli('update', '--dry-run', '--no-banner', '--source', 'git+https://example.test/project.git')
@@ -854,7 +855,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertTrue(any(
             event['kind'] == 'dc_ip'
             and event['status'] == 'rejected'
-            and event['detail'] == 'DNS resolved dc01.eighteen.htb to unusable address 224.0.0.1; pass --dc-ip to use a specific DC IPv4'
+            and event['detail'] == 'dc01.eighteen.htb resolved to unusable 224.0.0.1; continuing without inferred --dc-ip'
             for event in forge.report['inference']
         ))
         self.assertFalse(any(
@@ -964,7 +965,7 @@ class CLIBehaviorTests(unittest.TestCase):
                 {
                     'kind': 'dc_ip',
                     'status': 'rejected',
-                    'detail': 'DNS resolved dc01.eighteen.htb to unusable address 224.0.0.1; pass --dc-ip to use a specific DC IPv4',
+                    'detail': 'dc01.eighteen.htb resolved to unusable 224.0.0.1; continuing without inferred --dc-ip',
                 }
             ],
             'result': {

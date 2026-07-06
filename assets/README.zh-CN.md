@@ -1,12 +1,12 @@
 # dMSA Forge
 
-[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.9)
+[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.10)
 [![Tests](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml/badge.svg)](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Impacket%20Apache--1.1-blue)](https://github.com/RedteamNotes/dmsa-forge/blob/main/LICENSE)
 
 **语言：** [English](../README.md) | 简体中文 | [Français](README.fr.md)
 
-当前版本：`v0.5.9`
+当前版本：`v0.5.10`
 
 面向授权 [BadSuccessor](https://www.akamai.com/blog/security-research/abusing-dmsa-for-privilege-escalation-in-active-directory) LDAP 工作流的 [dMSA](https://learn.microsoft.com/zh-cn/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview) forge：assess、add、verify、delete。
 
@@ -54,8 +54,6 @@ python -m pip install ./dmsa-forge
 ```bash
 dmsa-forge -h
 ```
-
-同时会安装等价入口 `dmsaforge`。如果当前 shell 位于包含 `dmsa-forge/` 源码目录的位置，且裸 `dmsa-forge` 被 shell 目录跳转拦截，可改用 `dmsaforge`。
 
 有新版本时，直接更新当前正在使用的环境：
 
@@ -151,7 +149,7 @@ dmsa-forge delete redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes
 
 结构化 JSON 报告包含 `schema_version`，便于自动化脚本固定解析行为。
 
-人类终端输出按 `Run context`、`Progress`、`Findings` 和 `Next steps` 分块。Warning 和 error 仍保留 `[!]` / `[-]` 严重级别标记，并且只在终端支持时使用颜色；JSON、quiet 和 output-only 模式保持适合机器解析的干净输出。
+人类终端输出使用轻量分块标题：`Run context:`、`Progress:`、`Findings:` 和 `Next steps:`。Warning 和 error 仍保留 `[!]` / `[-]` 严重级别标记，并且只在终端支持时使用颜色；JSON、quiet 和 output-only 模式保持适合机器解析的干净输出。
 
 评估模式：
 

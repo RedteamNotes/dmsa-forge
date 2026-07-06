@@ -1,12 +1,12 @@
 # dMSA Forge
 
-[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.9)
+[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.10)
 [![Tests](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml/badge.svg)](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Impacket%20Apache--1.1-blue)](https://github.com/RedteamNotes/dmsa-forge/blob/main/LICENSE)
 
 **Language:** English | [简体中文](assets/README.zh-CN.md) | [Français](assets/README.fr.md)
 
-Current release: `v0.5.9`
+Current release: `v0.5.10`
 
 A [dMSA](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview) forge for authorized [BadSuccessor](https://www.akamai.com/blog/security-research/abusing-dmsa-for-privilege-escalation-in-active-directory) LDAP workflows: assess, add, verify, and delete.
 
@@ -54,8 +54,6 @@ After installation, run:
 ```bash
 dmsa-forge -h
 ```
-
-`dmsaforge` is installed as an equivalent alias. Use it when your shell is in a directory that also contains a `dmsa-forge/` checkout and bare `dmsa-forge` is intercepted by shell directory navigation.
 
 Update the active environment when a new release is available:
 
@@ -151,7 +149,7 @@ Safety controls:
 
 Structured JSON reports include `schema_version` so automation can pin parsing behavior.
 
-Human terminal output is grouped into `Run context`, `Progress`, `Findings`, and `Next steps`. Warnings and errors keep their `[!]` / `[-]` severity markers and use color only when the terminal supports it; JSON, quiet, and output-only modes stay machine-clean.
+Human terminal output uses compact section headers: `Run context:`, `Progress:`, `Findings:`, and `Next steps:`. Warnings and errors keep their `[!]` / `[-]` severity markers and use color only when the terminal supports it; JSON, quiet, and output-only modes stay machine-clean.
 
 Assessment modes:
 

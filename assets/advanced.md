@@ -72,10 +72,10 @@ Use `--output-only --output FILE` for file-only JSON output with mode `0600`.
 
 Normal terminal output is intentionally light and grouped by purpose:
 
-- `Run context`: parsed command values, inferred defaults, target DC, LDAP method, auth mode, and base DN;
-- `Progress`: connection and LDAP workflow events;
-- `Findings`: results that matter to the operator, including OU rights, dMSA verification, and cleanup status;
-- `Next steps`: concrete follow-up commands when the run succeeded or can continue.
+- `Run context:` parsed command values, inferred defaults, target DC, LDAP method, auth mode, and base DN;
+- `Progress:` connection and LDAP workflow events;
+- `Findings:` results that matter to the operator, including OU rights, dMSA verification, and cleanup status;
+- `Next steps:` concrete follow-up commands when the run succeeded or can continue.
 
 Warnings and errors use severity markers and color when stderr is a TTY. The same data remains available in JSON reports without terminal formatting.
 

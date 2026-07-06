@@ -1,12 +1,12 @@
 # dMSA Forge
 
-[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.9)
+[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.10)
 [![Tests](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml/badge.svg)](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Impacket%20Apache--1.1-blue)](https://github.com/RedteamNotes/dmsa-forge/blob/main/LICENSE)
 
 **Langue :** [English](../README.md) | [简体中文](README.zh-CN.md) | Français
 
-Version actuelle : `v0.5.9`
+Version actuelle : `v0.5.10`
 
 Forge [dMSA](https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview) pour les workflows LDAP [BadSuccessor](https://www.akamai.com/blog/security-research/abusing-dmsa-for-privilege-escalation-in-active-directory) autorisés : assess, add, verify et delete.
 
@@ -54,8 +54,6 @@ Après installation, exécutez :
 ```bash
 dmsa-forge -h
 ```
-
-`dmsaforge` est installé comme alias équivalent. Utilisez-le si votre shell se trouve dans un dossier qui contient aussi une copie `dmsa-forge/` et que `dmsa-forge` seul est intercepté par la navigation de répertoire du shell.
 
 Quand une nouvelle version est disponible, mettez à jour l'environnement actif :
 
@@ -151,7 +149,7 @@ Contrôles de sécurité :
 
 Les rapports JSON structures incluent `schema_version` afin que l'automatisation puisse figer le comportement de parsing.
 
-La sortie terminale humaine est groupee en `Run context`, `Progress`, `Findings` et `Next steps`. Les warnings et erreurs conservent leurs marqueurs de severite `[!]` / `[-]` et n'utilisent la couleur que lorsque le terminal la prend en charge ; les modes JSON, quiet et output-only restent propres pour les machines.
+La sortie terminale humaine utilise des en-tetes compacts : `Run context:`, `Progress:`, `Findings:` et `Next steps:`. Les warnings et erreurs conservent leurs marqueurs de severite `[!]` / `[-]` et n'utilisent la couleur que lorsque le terminal la prend en charge ; les modes JSON, quiet et output-only restent propres pour les machines.
 
 Modes d'évaluation :
 

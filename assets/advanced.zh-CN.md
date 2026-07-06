@@ -72,10 +72,10 @@ dmsa-forge plan add redteamnotes.com/operator --target-ou 'OU=Dev,DC=redteamnote
 
 普通终端输出保持轻量，并按信息目的分块：
 
-- `Run context`：解析后的命令值、推断默认值、目标 DC、LDAP 方法、认证方式和 base DN；
-- `Progress`：连接和 LDAP workflow 事件；
-- `Findings`：操作者最需要看的结果，包括 OU 权限、dMSA 验证和清理状态；
-- `Next steps`：执行成功或可以继续时的具体后续命令。
+- `Run context:` 解析后的命令值、推断默认值、目标 DC、LDAP 方法、认证方式和 base DN；
+- `Progress:` 连接和 LDAP workflow 事件；
+- `Findings:` 操作者最需要看的结果，包括 OU 权限、dMSA 验证和清理状态；
+- `Next steps:` 执行成功或可以继续时的具体后续命令。
 
 Warning 和 error 会使用严重级别标记，并且只在 stderr 是 TTY 时使用颜色。同一份数据会保留在 JSON 报告中，不带终端格式。
 

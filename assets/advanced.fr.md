@@ -72,10 +72,10 @@ Utilisez `--output-only --output FILE` pour une sortie JSON uniquement fichier a
 
 La sortie terminale normale reste legere et groupee par objectif :
 
-- `Run context` : valeurs de commande parsees, valeurs inferees, DC cible, methode LDAP, mode d'authentification et base DN ;
-- `Progress` : evenements de connexion et de workflow LDAP ;
-- `Findings` : resultats importants pour l'operateur, notamment droits OU, verification dMSA et etat du nettoyage ;
-- `Next steps` : commandes de suivi concretes lorsque le run a reussi ou peut continuer.
+- `Run context:` valeurs de commande parsees, valeurs inferees, DC cible, methode LDAP, mode d'authentification et base DN ;
+- `Progress:` evenements de connexion et de workflow LDAP ;
+- `Findings:` resultats importants pour l'operateur, notamment droits OU, verification dMSA et etat du nettoyage ;
+- `Next steps:` commandes de suivi concretes lorsque le run a reussi ou peut continuer.
 
 Les warnings et erreurs utilisent des marqueurs de severite et la couleur lorsque stderr est un TTY. Les memes donnees restent disponibles dans les rapports JSON sans formatage terminal.
 
