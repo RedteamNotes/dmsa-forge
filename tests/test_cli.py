@@ -708,6 +708,36 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertIn('(required for execution)', output)
         self.assertNotIn('Action "add" requires', output)
 
+    def test_verify_dry_run_does_not_mark_optional_principal_as_add_required(self):
+        result = run_cli(
+            'plan',
+            'verify',
+            'test.local/admin:pw',
+            '--target-ou',
+            'OU=Staff,DC=test,DC=local',
+            '--dmsa-name',
+            'redpen',
+            '--no-banner',
+        )
+        output = result.stdout + result.stderr
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('Principals Allowed:      (not set)', output)
+        self.assertNotIn('Principals Allowed:      (required for add execution)', output)
+
+    def test_assess_report_does_not_mark_add_only_inputs_required(self):
+        result = run_cli(
+            'plan',
+            'assess',
+            'test.local/admin:pw',
+            '--output-only',
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload['inputs']['target_account'], '(not set)')
+        self.assertEqual(payload['inputs']['principals_allowed'], '(not set)')
+
     def test_add_execution_requires_target_account_and_principals_allowed(self):
         result = run_cli(
             'add',
@@ -1049,6 +1079,38 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertIn('--dc-ip REAL_DC_IPV4', steps[0]['command'])
         self.assertNotIn('plan add', steps[0]['command'])
         self.assertNotIn('_next_step_candidates', report['result'])
+
+    def test_rejected_dc_ip_after_add_does_not_suggest_rerunning_add(self):
+        options = execution_options(
+            action='add',
+            account='eighteen.htb/adam.scott:iloveyou1',
+            dc_host='dc01.eighteen.htb',
+            dc_host_supplied=True,
+            dc_ip=None,
+            dmsa_name='redpen',
+            target_ou='OU=Staff,DC=eighteen,DC=htb',
+            principals_allowed='S-1-5-21-1-2-3-1604',
+        )
+        report = {
+            'inference': [
+                {
+                    'kind': 'dc_ip',
+                    'status': 'rejected',
+                    'detail': 'dc01.eighteen.htb resolved to unusable 224.0.0.1; continuing without inferred --dc-ip',
+                }
+            ],
+            'result': {},
+        }
+
+        cli.attach_next_steps(report, options, mode='execute', success=True)
+
+        commands = [step['command'] for step in report['result']['next_steps']]
+        self.assertTrue(commands[0].startswith('dmsa-forge verify '))
+        self.assertIn('--dc-ip REAL_DC_IPV4', commands[0])
+        self.assertTrue(commands[1].startswith('dmsa-forge delete '))
+        self.assertIn('--dc-ip REAL_DC_IPV4', commands[1])
+        self.assertFalse(any(command.startswith('dmsa-forge add ') for command in commands))
+        self.assertIn('/dc:<DC_IPV4>', '\n'.join(commands[2:]))
 
     def test_report_parsed_inputs_are_flat(self):
         result = run_cli('add', *BASE_ARGS, '--dry-run', '--output-only')

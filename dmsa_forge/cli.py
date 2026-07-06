@@ -3641,6 +3641,22 @@ def report_ready_value(value, options):
     return format_value_for_display(value, base_dn=display_base_dn(options), redact=options.redact)
 
 
+def report_input_target_account(options):
+    if options.target_account:
+        return report_ready_value(options.target_account, options)
+    if options.action == 'add':
+        return '(required for add execution)'
+    return '(not set)'
+
+
+def report_input_principals_allowed(options):
+    if options.principals_allowed:
+        return report_ready_value(options.principals_allowed, options)
+    if options.action == 'add':
+        return '(required for add execution)'
+    return '(not set)'
+
+
 def build_operation_report(options, mode, success=None, result=None):
     base_dn = current_base_dn(options)
     dmsa_dn = planned_dmsa_dn(options)
@@ -3670,8 +3686,8 @@ def build_operation_report(options, mode, success=None, result=None):
             'target_ou': report_ready_value(options.target_ou, options) if options.target_ou else '(not set)',
             'dmsa_name': options.dmsa_name or '(generated at runtime)',
             'planned_dmsa_dn': report_ready_value(dmsa_dn, options) if dmsa_dn else '(not available)',
-            'target_account': report_ready_value(options.target_account, options) if options.target_account else '(required for add execution)',
-            'principals_allowed': report_ready_value(options.principals_allowed, options) if options.principals_allowed else '(required for add execution)',
+            'target_account': report_input_target_account(options),
+            'principals_allowed': report_input_principals_allowed(options),
             'dns_hostname': dns_hostname or '(generated at runtime)',
             'hashes_provided': bool(options.hashes),
             'aes_key_provided': bool(options.aes_key),
@@ -4018,20 +4034,23 @@ def build_next_steps(options, mode, success, result=None, report=None):
     if not success:
         return steps
 
+    step_options = options
     if report_has_rejected_dc_ip(report) and not options.dc_ip and options.action in ACTION_CHOICES:
-        add('Rerun with a real DC IPv4', command_for_dc_ip_fix(options))
-        return steps
+        step_options = options_with_overrides(options, dc_ip='REAL_DC_IPV4')
+        if options.action in ASSESS_ACTIONS:
+            add('Rerun with a real DC IPv4', command_for_dc_ip_fix(options))
+            return steps
 
     if options.action == 'add':
-        add('Verify the dMSA object', command_for_action('verify', options, kerberos_guidance=False))
-        add('Delete the dMSA object when finished', command_for_action('delete', options, yes=True))
+        add('Verify the dMSA object', command_for_action('verify', step_options, kerberos_guidance=False))
+        add('Delete the dMSA object when finished', command_for_action('delete', step_options, yes=True))
         if not options.kerberos_guidance:
-            for command in kerberos_guidance_commands_for_options(options):
+            for command in kerberos_guidance_commands_for_options(step_options):
                 add('Kerberos command', command)
     elif options.action == 'verify':
-        add('Delete the dMSA object when finished', command_for_action('delete', options, yes=True))
+        add('Delete the dMSA object when finished', command_for_action('delete', step_options, yes=True))
         if not options.kerberos_guidance:
-            for command in kerberos_guidance_commands_for_options(options):
+            for command in kerberos_guidance_commands_for_options(step_options):
                 add('Kerberos command', command)
     elif options.action in ASSESS_ACTIONS:
         if not search_result_has_followup_value(result):
@@ -4040,12 +4059,12 @@ def build_next_steps(options, mode, success, result=None, report=None):
         if candidates:
             add(
                 'Review add plan for discovered principal',
-                command_for_search_add_plan(options, candidates[0]),
+                command_for_search_add_plan(step_options, candidates[0]),
             )
         elif not (options.include_sd and options.resolve_names):
-            add('Resolve matching SID names', command_for_action(options.action, options, include_security_descriptor=True, resolve_names=True))
+            add('Resolve matching SID names', command_for_action(options.action, step_options, include_security_descriptor=True, resolve_names=True))
     elif options.action == 'delete':
-        add('Confirm cleanup with assess', command_for_action('assess', options))
+        add('Confirm cleanup with assess', command_for_action('assess', step_options))
     return steps
 
 
