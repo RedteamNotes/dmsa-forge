@@ -199,12 +199,12 @@ class CLIBehaviorTests(unittest.TestCase):
         result = run_cli('add', '-h')
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertIn('usage: dmsaforge add [domain/]username[:password] -o OU_DN [options]', result.stdout)
+        self.assertIn('usage: dmsaforge add [domain/]username[:password] --ou OU_DN [options]', result.stdout)
         self.assertIn('-o', result.stdout)
         self.assertIn('--ou', result.stdout)
-        self.assertIn('--target-ou OU_DN', result.stdout)
+        self.assertIn('--ou, --target-ou, -o OU_DN', result.stdout)
         self.assertIn('-d', result.stdout)
-        self.assertIn('--dmsa-name NAME', result.stdout)
+        self.assertIn('--dmsa-name, -d NAME', result.stdout)
         self.assertIn('--target-account', result.stdout)
 
     def test_unknown_action_specific_help_fails_cleanly(self):
@@ -212,6 +212,18 @@ class CLIBehaviorTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 2)
         self.assertIn('Unknown plan action', result.stderr)
+
+    def test_plan_help_uses_current_compact_format(self):
+        result = run_cli('plan', '--help')
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('dmsaforge v', result.stdout)
+        self.assertIn('usage: dmsaforge plan ACTION [domain/]username[:password] [options]', result.stdout)
+        self.assertIn('main:', result.stdout)
+        self.assertIn('Action to preview: assess, add, verify, or delete.', result.stdout)
+        self.assertIn('More information: https://github.com/RedteamNotes/dmsa-forge', result.stdout)
+        self.assertNotIn('Behavior:', result.stdout)
+        self.assertNotIn('Usage:', result.stdout)
 
     def test_action_flag_workflow_is_removed(self):
         result = run_cli(
@@ -443,11 +455,11 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(payload['inputs']['dmsa_name'], 'redpen')
         self.assertEqual(payload['inputs']['target_account'], 'Administrator')
         command = payload['result']['next_steps'][0]['command']
-        self.assertIn('-m LDAP', command)
-        self.assertIn('-p 389', command)
-        self.assertIn('-o OU=Staff,DC=test,DC=local', command)
-        self.assertIn('-d redpen', command)
-        self.assertIn('-t Administrator', command)
+        self.assertIn('--method LDAP', command)
+        self.assertIn('--port 389', command)
+        self.assertIn('--ou OU=Staff,DC=test,DC=local', command)
+        self.assertIn('--dmsa-name redpen', command)
+        self.assertIn('--target-account Administrator', command)
 
     def test_action_advanced_help_is_removed(self):
         result = run_cli('add', 'test.local/admin:pw', '--help-advanced')
@@ -627,7 +639,7 @@ class CLIBehaviorTests(unittest.TestCase):
         result = run_cli('add', *BASE_ARGS, '--dmsa-name', 'bad,name', '--dry-run', '--output-only')
 
         self.assertEqual(result.returncode, 2)
-        self.assertIn('-d/--dmsa-name must be a DNS-safe label', result.stderr)
+        self.assertIn('--dmsa-name must be a DNS-safe label', result.stderr)
 
     def test_execute_rejects_invalid_dns_hostname_before_ldap(self):
         result = run_cli('add', *BASE_ARGS, '--dns-hostname', 'not-a-fqdn', '--dry-run', '--output-only')
@@ -823,7 +835,7 @@ class CLIBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 2)
-        self.assertIn('Action "add" execution requires: -t/--target-account, --principals-allowed', result.stderr)
+        self.assertIn('Action "add" execution requires: --target-account, --principals-allowed', result.stderr)
         self.assertIn('dmsaforge plan add', result.stderr)
 
     def test_human_next_step_suggests_dmsa_name_from_target_account(self):
@@ -850,7 +862,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertIn('Next steps', output)
         self.assertIn(
-            "proxychains -f chain1080.conf -q dmsaforge add eighteen.htb/adam.scott:iloveyou1 --dc-host dc01.eighteen.htb -o OU=Staff,DC=eighteen,DC=htb -d redpen -t Administrator --principals-allowed S-1-5-21-1152179935-589108180-1989892463-1604",
+            "proxychains -f chain1080.conf -q dmsaforge add eighteen.htb/adam.scott:iloveyou1 --dc-host dc01.eighteen.htb --ou OU=Staff,DC=eighteen,DC=htb --dmsa-name redpen --target-account Administrator --principals-allowed S-1-5-21-1152179935-589108180-1989892463-1604",
             output,
         )
         self.assertNotIn('<TARGET_ACCOUNT_DN_OR_SAM>', output)
@@ -1099,10 +1111,10 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(report['result']['next_steps'][0]['label'], 'Review add plan for discovered principal')
         self.assertIn('dmsaforge plan add test.local/admin:pw', command)
         self.assertIn('--dc-host dc01.test.local', command)
-        self.assertIn('-o OU=Staff,DC=test,DC=local', command)
-        self.assertIn('-d redpen', command)
+        self.assertIn('--ou OU=Staff,DC=test,DC=local', command)
+        self.assertIn('--dmsa-name redpen', command)
         self.assertIn('--principals-allowed S-1-5-21-1-2-3-1604', command)
-        self.assertIn('-t Administrator', command)
+        self.assertIn('--target-account Administrator', command)
         self.assertNotIn('<TARGET_ACCOUNT_DN_OR_SAM>', command)
         self.assertNotIn('hint', report['result']['next_steps'][0])
         self.assertNotIn('_next_step_candidates', report['result'])
@@ -1132,7 +1144,7 @@ class CLIBehaviorTests(unittest.TestCase):
 
         command = report['result']['next_steps'][0]['command']
         self.assertTrue(command.startswith('proxychains -f chain1080.conf -q dmsaforge plan add'))
-        self.assertIn('-d redpen', command)
+        self.assertIn('--dmsa-name redpen', command)
 
     def test_rejected_dc_ip_next_step_reruns_current_action_first(self):
         options = execution_options(
@@ -1501,7 +1513,7 @@ class CLIBehaviorTests(unittest.TestCase):
         forge = minimal_forge()
 
         self.assertIn(
-            'use -d/--dmsa-name redpen',
+            'use --dmsa-name redpen',
             forge._target_account_usage_hint('redpen'),
         )
         forge._dmsa_name_supplied = True

