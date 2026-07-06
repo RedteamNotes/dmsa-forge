@@ -84,6 +84,8 @@ ANSI_YELLOW = '\033[33m'
 ANSI_RED = '\033[31m'
 ANSI_BOLD_RED = '\033[1;31m'
 ANSI_RESET = '\033[0m'
+HELP_WIDTH = 180
+HELP_MAX_POSITION = 36
 
 ASCII_BANNER = r'''
     . .    . .-.    .          .---.
@@ -135,6 +137,11 @@ class TerminalColorFormatter(logging.Formatter):
         if record.levelno >= logging.WARNING:
             return '%s%s%s' % (ANSI_YELLOW, text, ANSI_RESET)
         return text
+
+
+class WideHelpFormatter(argparse.RawDescriptionHelpFormatter):
+    def __init__(self, prog):
+        super().__init__(prog, max_help_position=HELP_MAX_POSITION, width=HELP_WIDTH)
 
 
 def log_section(title, leading_blank=True):
@@ -2601,27 +2608,27 @@ CLI_DEFAULTS = {
 
 OPTION_ALIASES = {
     'allow_admin_fallback': ('--allow-admin-fallback',),
-    'base_dn': ('--base-dn', '--baseDN', '-baseDN'),
-    'dc_host': ('--dc-host', '-dc-host'),
-    'dc_ip': ('--dc-ip', '-dc-ip'),
-    'debug': ('--debug', '-debug'),
-    'dmsa_name': ('--dmsa-name', '-dmsa-name'),
-    'dns_hostname': ('--dns-hostname', '-dns-hostname'),
+    'base_dn': ('--base-dn',),
+    'dc_host': ('--dc-host',),
+    'dc_ip': ('--dc-ip',),
+    'debug': ('--debug',),
+    'dmsa_name': ('--dmsa-name',),
+    'dns_hostname': ('--dns-hostname',),
     'dry_run': ('--dry-run', '--plan'),
     'include_sd': ('--include-security-descriptor',),
     'json': ('--json',),
     'k': ('--kerberos', '-k'),
-    'kdc_wait': ('--kdc-wait', '-kdc-wait'),
+    'kdc_wait': ('--kdc-wait',),
     'kerberos_guidance': ('--kerberos-guidance',),
     'low_noise': ('--lean',),
-    'method': ('--method', '-method'),
+    'method': ('--method',),
     'minimal': ('--minimal',),
     'next_step_prefix': ('--next-step-prefix', '--command-prefix'),
     'no_banner': ('--no-banner',),
     'output': ('--output',),
     'output_only': ('--output-only', '--minimal-output'),
-    'port': ('--port', '-port'),
-    'principals_allowed': ('--principals-allowed', '-principals-allowed'),
+    'port': ('--port',),
+    'principals_allowed': ('--principals-allowed',),
     'profile': ('--profile',),
     'quiet': ('--quiet',),
     'redact': ('--redact', '--no-redact'),
@@ -2630,44 +2637,17 @@ OPTION_ALIASES = {
     'scope_domain': ('--scope-domain',),
     'search_summary': ('--summary',),
     'skip_dc_prereq': ('--skip-dc-prereq',),
-    'target_account': ('--target-account', '-target-account'),
-    'target_ou': ('--target-ou', '-target-ou'),
+    'target_account': ('--target-account',),
+    'target_ou': ('--target-ou',),
     'verify_attempts': ('--verify-attempts',),
     'verify_delay': ('--verify-delay',),
 }
 
 ACTION_HELP = {
-    'assess': '''assess - evaluate BadSuccessor OU feasibility
-
-Default behavior:
-  Requests OU security descriptors, analyzes BadSuccessor-relevant rights,
-  and checks whether the bound account matches any listed effective SID.
-  Use --summary for a lightweight OU-only listing.
-''',
-    'add': '''add - create and verify a dMSA object
-
-Required:
-  --target-ou OU_DN
-  --target-account ACCOUNT_OR_DN
-  --principals-allowed USER_OR_SID
-''',
-    'verify': '''verify - read and validate an existing dMSA object
-
-Required:
-  --target-ou OU_DN
-  --dmsa-name NAME
-''',
-    'delete': '''delete - remove a dMSA object
-
-Required:
-  --target-ou OU_DN
-  --dmsa-name NAME
-  --yes
-
-Safety:
-  Use --dry-run first. The account domain is used as the default scope guardrail;
-  override it with --scope-domain or --scope-base-dn when needed.
-''',
+    'assess': 'assess - evaluate BadSuccessor OU feasibility by reading OU security descriptors, identifying relevant rights, and checking whether the bound account matches any listed effective SID. Use --summary for a lightweight OU-only listing.',
+    'add': 'add - create and verify a dMSA object, with target OU, predecessor account, and managed-password reader validated before LDAP writes.',
+    'verify': 'verify - read and validate an existing dMSA object, with target OU and dMSA name validated before LDAP reads.',
+    'delete': 'delete - remove a dMSA object, requiring target OU, dMSA name, and explicit --yes confirmation before LDAP deletion.',
 }
 
 
@@ -2717,6 +2697,14 @@ def print_parser_help_with_hint(parser, shell=None, no_banner=False):
         print_startup_banner()
     parser.print_help()
     print_completion_hint(shell)
+    sys.stdout.flush()
+
+
+def print_action_help(action, no_banner=False):
+    if not no_banner and should_show_banner():
+        print_startup_banner()
+    parser = build_action_help_parser(action)
+    parser.print_help()
     sys.stdout.flush()
 
 
@@ -4293,7 +4281,7 @@ def emit_report(options, report):
 
 
 def add_common_local_options(parser, include_workflow=True, concise=False):
-    local = parser.add_argument_group('local controls')
+    local = parser
     hidden = argparse.SUPPRESS
     local.add_argument('--profile', choices=PROFILE_CHOICES, help=hidden if concise else 'Apply a local preset: safe=redacted dry-run, report=JSON report, ci=quiet JSON/no banner.')
     if include_workflow:
@@ -4312,23 +4300,23 @@ def add_common_local_options(parser, include_workflow=True, concise=False):
 
 
 def add_connection_options(parser, include_auth=True, show_auth=True, concise=False):
-    ldap_group = parser.add_argument_group('LDAP')
+    ldap_group = parser if concise else parser.add_argument_group('LDAP')
     hidden = argparse.SUPPRESS
-    ldap_group.add_argument('--base-dn', '--baseDN', '-baseDN', dest='base_dn', action='store', metavar='BASE_DN', help=hidden if concise else 'Set LDAP base DN. Defaults from account domain.')
+    ldap_group.add_argument('--base-dn', dest='base_dn', action='store', metavar='BASE_DN', help=hidden if concise else 'Set LDAP base DN. Defaults from account domain.')
     ldap_group.add_argument('--scope-base-dn', action='store', metavar='BASE_DN', help=hidden if concise else 'Guardrail: refuse target DNs outside this base DN. Defaults from account/scope domain.')
     ldap_group.add_argument('--scope-domain', action='store', metavar='FQDN', help=hidden if concise else 'Guardrail: refuse obvious domain/base DN mismatches. Defaults from account domain.')
-    ldap_group.add_argument('--method', '-method', type=connection_method, default='LDAP', help='Connection method: LDAP or LDAPS. Defaults to LDAP/389.')
-    ldap_group.add_argument('--port', '-port', type=int, choices=[389, 636], help='Destination port. LDAP defaults to 389, LDAPS to 636.')
-    ldap_group.add_argument('--dc-host', '-dc-host', dest='dc_host', action='store', metavar='HOSTNAME', help='Hostname of the domain controller.')
-    ldap_group.add_argument('--dc-ip', '-dc-ip', dest='dc_ip', action='store', metavar='IP', help='IP of the domain controller.')
+    ldap_group.add_argument('--method', type=connection_method, default='LDAP', help='Connection method: LDAP or LDAPS. Defaults to LDAP/389.')
+    ldap_group.add_argument('--port', type=int, choices=[389, 636], help='Destination port. LDAP defaults to 389, LDAPS to 636.')
+    ldap_group.add_argument('--dc-host', dest='dc_host', action='store', metavar='HOSTNAME', help='Hostname of the domain controller.')
+    ldap_group.add_argument('--dc-ip', dest='dc_ip', action='store', metavar='IP', help='IP of the domain controller.')
 
     if include_auth:
         help_text = None if show_auth else argparse.SUPPRESS
-        auth_group = parser.add_argument_group('authentication')
-        auth_group.add_argument('--hashes', '-hashes', action='store', metavar='LMHASH:NTHASH', help='NTLM hashes.' if show_auth else help_text)
-        auth_group.add_argument('--no-pass', '-no-pass', dest='no_pass', action='store_true', help="Don't ask for password." if show_auth else help_text)
+        auth_group = parser if concise else parser.add_argument_group('authentication')
+        auth_group.add_argument('--hashes', action='store', metavar='LMHASH:NTHASH', help='NTLM hashes.' if show_auth else help_text)
+        auth_group.add_argument('--no-pass', dest='no_pass', action='store_true', help="Don't ask for password." if show_auth else help_text)
         auth_group.add_argument('--kerberos', '-k', dest='k', action='store_true', help='Use Kerberos authentication.' if show_auth else help_text)
-        auth_group.add_argument('--aes-key', '--aesKey', '-aesKey', dest='aes_key', action='store', metavar='HEX', help='AES key for Kerberos authentication.' if show_auth else help_text)
+        auth_group.add_argument('--aes-key', dest='aes_key', action='store', metavar='HEX', help='AES key for Kerberos authentication.' if show_auth else help_text)
 
 
 def add_common_advanced_options(parser, include_workflow=True, visible=True):
@@ -4337,40 +4325,61 @@ def add_common_advanced_options(parser, include_workflow=True, visible=True):
     if include_workflow:
         advanced.add_argument('--allow-admin-fallback', action='store_true', help='Compatibility flag; exact target-account DN candidates are tried automatically and logged.' if visible else hidden)
         advanced.add_argument('--kerberos-guidance', action='store_true', help='After a verified add/verify, print external Kerberos commands.' if visible else hidden)
-        advanced.add_argument('--kdc-wait', '-kdc-wait', dest='kdc_wait', action='store', type=non_negative_int, default=0, metavar='SECONDS', help='Wait after LDAP verification. Default: 0.' if visible else hidden)
+        advanced.add_argument('--kdc-wait', dest='kdc_wait', action='store', type=non_negative_int, default=0, metavar='SECONDS', help='Wait after LDAP verification. Default: 0.' if visible else hidden)
         advanced.add_argument('--verify-attempts', action='store', type=non_negative_int, default=DEFAULT_VERIFY_ATTEMPTS, metavar='N', help='Post-add LDAP verification attempts.' if visible else hidden)
         advanced.add_argument('--verify-delay', action='store', type=non_negative_float, default=DEFAULT_VERIFY_DELAY, metavar='SECONDS', help='Delay between post-add verification attempts.' if visible else hidden)
-    advanced.add_argument('--ts', '-ts', action='store_true', help='Add timestamps to logging output.' if visible else hidden)
-    advanced.add_argument('--debug', '-debug', action='store_true', help='Turn DEBUG output ON.' if visible else hidden)
+    advanced.add_argument('--ts', action='store_true', help='Add timestamps to logging output.' if visible else hidden)
+    advanced.add_argument('--debug', action='store_true', help='Turn DEBUG output ON.' if visible else hidden)
     advanced.add_argument('--next-step-prefix', '--command-prefix', dest='next_step_prefix', action='store', metavar='COMMAND', help='Prefix generated next-step commands only.' if visible else hidden)
 
 
-def add_dmsa_workflow_options(parser, action):
-    workflow = parser.add_argument_group('workflow')
+def add_dmsa_workflow_options(parser, action, concise=False):
+    workflow = parser if concise else parser.add_argument_group('workflow')
     if action in ('add', 'verify', 'delete'):
-        workflow.add_argument('--dmsa-name', '-dmsa-name', dest='dmsa_name', action='store', metavar='NAME', help='dMSA name.')
-        workflow.add_argument('--target-ou', '-target-ou', dest='target_ou', action='store', metavar='OU_DN', help='Target OU DN.')
+        workflow.add_argument('--dmsa-name', dest='dmsa_name', action='store', metavar='NAME', help='dMSA name.')
+        workflow.add_argument('--target-ou', dest='target_ou', action='store', metavar='OU_DN', help='Target OU DN.')
     if action == 'add':
-        workflow.add_argument('--target-account', '-target-account', dest='target_account', action='store', metavar='ACCOUNT_OR_DN', help='Target user/computer sAMAccountName or DN. Required for execution.')
+        workflow.add_argument('--target-account', dest='target_account', action='store', metavar='ACCOUNT_OR_DN', help='Target user/computer sAMAccountName or DN.')
     if action in ('add', 'verify'):
-        workflow.add_argument('--principals-allowed', '-principals-allowed', dest='principals_allowed', action='store', metavar='USER_OR_SID', help='Expected managed-password reader.')
+        workflow.add_argument('--principals-allowed', dest='principals_allowed', action='store', metavar='USER_OR_SID', help='Expected managed-password reader.')
     if action == 'add':
-        workflow.add_argument('--dns-hostname', '-dns-hostname', dest='dns_hostname', action='store', metavar='HOSTNAME', help='DNS hostname for the dMSA.')
+        workflow.add_argument('--dns-hostname', dest='dns_hostname', action='store', metavar='HOSTNAME', help='DNS hostname for the dMSA.')
     if action in DESTRUCTIVE_ACTIONS:
         workflow.add_argument('--yes', action='store_true', help='Confirm destructive action.')
     if action in ASSESS_ACTIONS:
-        search = parser.add_argument_group('assessment')
-        search.add_argument('--target-ou', '-target-ou', dest='target_ou', action='store', metavar='OU_DN', help='Optional OU DN used as the assessment base.')
+        search = parser if concise else parser.add_argument_group('assessment')
+        search.add_argument('--target-ou', dest='target_ou', action='store', metavar='OU_DN', help='Optional OU DN used as the assessment base.')
         search.add_argument('--summary', dest='search_summary', action='store_true', help='Run lightweight OU-only mode without security descriptor analysis.')
         search.add_argument('--include-security-descriptor', dest='include_sd', action='store_true', help='Request and analyze OU nTSecurityDescriptor security descriptors. This is the default unless --summary is used.')
         search.add_argument('--resolve-names', action='store_true', help='Resolve matching SIDs to account names. Requires --include-security-descriptor.')
         search.add_argument('--skip-dc-prereq', action='store_true', help='Skip the Windows Server 2025 prerequisite DC query.')
 
 
+def configure_action_parser(parser, action):
+    parser.set_defaults(action=action, command=action, action_first=True)
+    parser.add_argument('account', action='store', metavar='[domain/]username[:password]', help='Account used to authenticate to DC.')
+    add_dmsa_workflow_options(parser, action, concise=True)
+    add_common_local_options(parser, concise=True)
+    add_connection_options(parser, show_auth=False, concise=True)
+    add_common_advanced_options(parser, visible=False)
+    return parser
+
+
+def build_action_help_parser(action):
+    parser = argparse.ArgumentParser(
+        prog='%s %s' % (TOOL_NAME, action),
+        usage=ACTION_USAGE[action],
+        description=ACTION_HELP.get(action, ACTION_SUMMARY[action]),
+        formatter_class=WideHelpFormatter,
+    )
+    configure_action_parser(parser, action)
+    return parser
+
+
 def build_subcommand_parser():
     parser = argparse.ArgumentParser(
         prog='dmsa-forge',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        formatter_class=WideHelpFormatter,
     )
     parser.add_argument('-v', '--version', action='version', version='%s %s' % (TOOL_NAME, TOOL_VERSION))
     parser.add_argument('--completion-script', choices=('bash', 'zsh'), help=argparse.SUPPRESS)
@@ -4382,14 +4391,9 @@ def build_subcommand_parser():
             help=ACTION_SUMMARY[action],
             usage=ACTION_USAGE[action],
             description=ACTION_HELP.get(action, ACTION_SUMMARY[action]),
-            formatter_class=argparse.RawDescriptionHelpFormatter,
+            formatter_class=WideHelpFormatter,
         )
-        subparser.set_defaults(action=action, command=action, action_first=True)
-        subparser.add_argument('account', action='store', metavar='[domain/]username[:password]', help='Account used to authenticate to DC.')
-        add_dmsa_workflow_options(subparser, action)
-        add_common_local_options(subparser, concise=True)
-        add_connection_options(subparser, show_auth=False, concise=True)
-        add_common_advanced_options(subparser, visible=False)
+        configure_action_parser(subparser, action)
 
     plan_parser = subparsers.add_parser(
         'plan',
@@ -4420,7 +4424,7 @@ def build_doctor_parser():
     doctor_parser = argparse.ArgumentParser(
         prog='dmsa-forge doctor',
         description='Check local dependencies, inferred values, scope, and DN syntax without opening LDAP.',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        formatter_class=WideHelpFormatter,
     )
     doctor_parser.set_defaults(action='doctor', command='doctor', action_first=True)
     doctor_parser.add_argument('account', nargs='?', default='', metavar='[domain/]username[:password]', help='Optional account hint for domain/base DN derivation.')
@@ -5387,6 +5391,11 @@ def _main(argv=None):
         parser = build_subcommand_parser()
         print_parser_help_with_hint(parser, no_banner=True)
         return 0
+
+    if argv and argv[0] in VISIBLE_ACTION_CHOICES:
+        if len(argv) == 1 or any(arg in ('-h', '--help') for arg in argv[1:]):
+            print_action_help(argv[0], no_banner='--no-banner' in argv[1:])
+            return 0
 
     if argv:
         if argv[0] in REMOVED_COMMANDS:

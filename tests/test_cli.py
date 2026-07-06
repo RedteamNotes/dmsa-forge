@@ -320,12 +320,67 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertIn('usage: dmsa-forge add', result.stdout)
         self.assertIn('--target-account', result.stdout)
-        self.assertIn('local controls:', result.stdout)
+        self.assertIn('options:', result.stdout)
+        self.assertNotIn('local controls:', result.stdout)
+        self.assertNotIn('workflow:', result.stdout)
+        self.assertNotIn('LDAP:', result.stdout)
         self.assertNotIn('--help-advanced', result.stdout)
         self.assertNotIn('\\\n', result.stdout)
         self.assertNotIn('--hashes', result.stdout)
+        self.assertNotIn(', -dc-host', result.stdout)
+        self.assertNotIn(', -target-ou', result.stdout)
+        self.assertNotIn(', -method', result.stdout)
         self.assertNotIn('--allow-admin-fallback', result.stdout)
         self.assertNotIn('--next-step-prefix', result.stdout)
+
+    def test_action_help_keeps_requirements_in_description_not_blocks(self):
+        for action in ('assess', 'add', 'verify', 'delete'):
+            with self.subTest(action=action):
+                result = run_cli(action, '-h')
+
+                self.assertEqual(result.returncode, 0, msg=result.stderr)
+                self.assertNotIn('Required:', result.stdout)
+                self.assertNotIn('Safety:', result.stdout)
+                self.assertNotIn('local controls:', result.stdout)
+
+    def test_doctor_help_flattens_local_controls(self):
+        result = run_cli('doctor', '-h')
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('options:', result.stdout)
+        self.assertNotIn('local controls:', result.stdout)
+
+    def test_action_help_prints_banner_on_interactive_terminal(self):
+        output = io.StringIO()
+        original_should_show_banner = cli.should_show_banner
+        try:
+            cli.should_show_banner = lambda options=None: True
+            with contextlib.redirect_stdout(output):
+                result = cli.main(['assess', '--help'])
+        finally:
+            cli.should_show_banner = original_should_show_banner
+
+        text = output.getvalue()
+        self.assertEqual(result, 0)
+        self.assertIn('%s %s - by %s' % (cli.TOOL_NAME, cli.TOOL_VERSION, cli.MODIFICATIONS_BY), text)
+        self.assertIn(cli.PROJECT_URL, text)
+        self.assertIn('usage: dmsa-forge assess', text)
+
+    def test_empty_action_commands_print_action_help(self):
+        for action in ('assess', 'add', 'verify', 'delete'):
+            with self.subTest(action=action):
+                result = run_cli(action)
+
+                self.assertEqual(result.returncode, 0, msg=result.stderr)
+                self.assertIn('usage: dmsa-forge %s' % action, result.stdout)
+                self.assertIn('[domain/]username[:password]', result.stdout)
+                self.assertEqual(result.stderr, '')
+
+    def test_single_dash_long_options_are_rejected(self):
+        result = run_cli('add', '-dc-host', 'dc.test.local', '--no-banner')
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('unrecognized arguments: -dc-host', result.stderr)
 
     def test_action_advanced_help_is_removed(self):
         result = run_cli('add', 'test.local/admin:pw', '--help-advanced')
