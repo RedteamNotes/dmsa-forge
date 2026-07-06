@@ -25,9 +25,9 @@ dMSA Forge garde l'état d'exécution visible dans la ligne de commande et ne ch
 - Quand ni `--method` ni `--port` ne sont explicites, l'exécution tente d'abord LDAP/389 et peut tenter LDAPS/636 seulement si la première connexion échoue.
 - Un `--port 636` seul infère `LDAPS` ; un `--port 389` seul infère `LDAP`.
 - `--method LDAPS` utilise le port `636` par défaut ; définir explicitement l'une des options de connexion désactive l'essai method/port.
-- Pour `add`, `--target-account` vaut `Administrator` par défaut ; fournissez un autre sAMAccountName ou DN si nécessaire.
+- Pour l'exécution réelle de `add`, `--target-account` est requis et définit le DN écrit dans `msDS-ManagedAccountPrecededByLink`.
 - `--dns-hostname` vaut `<dmsa-name>.<account-domain>` lorsque `--dmsa-name` est défini.
-- `--principals-allowed` utilise le nom d'utilisateur authentifié au moment de l'exécution s'il est omis.
+- Pour l'exécution réelle de `add`, `--principals-allowed` est requis et définit le SID écrit dans `msDS-GroupMSAMembership`.
 - La résolution automatique de l'IP du DC utilise uniquement le DNS local. Elle ne lance ni ping ni sonde, et rejette les adresses à usage spécial avant de les utiliser dans les suggestions Kerberos.
 - Pour `search`, `--target-ou` réduit la base de recherche OU, et la vérification préalable du DC est best-effort.
 
@@ -44,7 +44,7 @@ Les commandes `next_steps` générées héritent du wrapper proxychains détect�
 `dmsa-forge plan ACTION ...` est un raccourci pour `dmsa-forge ACTION ... --dry-run`.
 
 ```bash
-dmsa-forge plan add eighteen.htb/user --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen
+dmsa-forge plan add eighteen.htb/user --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account ACCOUNT_TO_SUCCEED --principals-allowed SID_OR_NAME
 ```
 
 Il utilise la meme validation et le meme format de rapport que le mode dry-run.

@@ -25,9 +25,9 @@ dMSA Forge 保持运行状态都体现在命令行中，不加载项目配置文
 - 未显式传 `--method` 和 `--port` 时，执行阶段会先尝试 LDAP/389；如果连接失败，才会继续尝试 LDAPS/636。
 - 单独传 `--port 636` 会推断 `LDAPS`；单独传 `--port 389` 会推断 `LDAP`。
 - `--method LDAPS` 默认使用端口 `636`；只要显式传了任一连接参数，就不会再做 method/port 试探。
-- 对 `add` 来说，`--target-account` 默认是 `Administrator`；需要其它目标时再传 sAMAccountName 或 DN。
+- 对真实 `add` 执行来说，`--target-account` 必填，它决定写入 `msDS-ManagedAccountPrecededByLink` 的账号 DN。
 - 设置 `--dmsa-name` 后，`--dns-hostname` 默认是 `<dmsa-name>.<account-domain>`。
-- `--principals-allowed` 未设置时，真实执行阶段默认使用当前认证用户名。
+- 对真实 `add` 执行来说，`--principals-allowed` 必填，它决定写入 `msDS-GroupMSAMembership` 的 SID。
 - 自动 DC IP 解析只使用本地 DNS，不会 ping 或探测；特殊用途地址会在进入 Kerberos 命令建议前被拒绝。
 - 对 `search` 来说，`--target-ou` 用于缩小 OU 搜索基准，DC 前置检查是 best-effort。
 
@@ -44,7 +44,7 @@ dMSA Forge 保持运行状态都体现在命令行中，不加载项目配置文
 `dmsa-forge plan ACTION ...` 等价于 `dmsa-forge ACTION ... --dry-run`。
 
 ```bash
-dmsa-forge plan add eighteen.htb/user --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen
+dmsa-forge plan add eighteen.htb/user --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account ACCOUNT_TO_SUCCEED --principals-allowed SID_OR_NAME
 ```
 
 它使用和普通 dry-run 相同的校验与报告格式。

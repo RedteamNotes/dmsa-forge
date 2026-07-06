@@ -614,7 +614,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertNotIn('<redacted>', output)
         self.assertNotIn('<SID>', output)
 
-    def test_add_defaults_target_account_to_administrator(self):
+    def test_add_dry_run_marks_target_and_principal_as_required(self):
         result = run_cli(
             'add',
             'test.local/admin:pw',
@@ -628,10 +628,26 @@ class CLIBehaviorTests(unittest.TestCase):
         output = result.stdout + result.stderr
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertIn('Target Account:          Administrator (inferred)', output)
+        self.assertIn('Target Account:          (required for add execution)', output)
+        self.assertIn('Principals Allowed:      (required for add execution)', output)
         self.assertIn('msDS-ManagedAccountPrecededByLink:', output)
-        self.assertIn('DN resolved from Administrator', output)
+        self.assertIn('(required for execution)', output)
         self.assertNotIn('Action "add" requires', output)
+
+    def test_add_execution_requires_target_account_and_principals_allowed(self):
+        result = run_cli(
+            'add',
+            'test.local/admin:pw',
+            '--target-ou',
+            'OU=Staff,DC=test,DC=local',
+            '--dmsa-name',
+            'redpen',
+            '--no-banner',
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('Action "add" execution requires: --target-account, --principals-allowed', result.stderr)
+        self.assertIn('dmsa-forge plan add', result.stderr)
 
     def test_human_next_step_suggests_dmsa_name_from_target_account(self):
         result = run_cli(
@@ -657,7 +673,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertIn('Next steps:', output)
         self.assertIn(
-            "proxychains -f chain1080.conf -q dmsa-forge add eighteen.htb/adam.scott:iloveyou1 --dc-host dc01.eighteen.htb --target-ou OU=Staff,DC=eighteen,DC=htb --dmsa-name redpen --target-account Administrator --principals-allowed S-1-5-21-1152179935-589108180-1989892463-1604",
+            "proxychains -f chain1080.conf -q dmsa-forge add eighteen.htb/adam.scott:iloveyou1 --dc-host dc01.eighteen.htb --target-ou OU=Staff,DC=eighteen,DC=htb --dmsa-name redpen --target-account ACCOUNT_TO_SUCCEED --principals-allowed S-1-5-21-1152179935-589108180-1989892463-1604",
             output,
         )
         self.assertNotIn('<TARGET_ACCOUNT_DN_OR_SAM>', output)
@@ -884,7 +900,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertIn('--target-ou OU=Staff,DC=test,DC=local', command)
         self.assertIn('--dmsa-name redpen', command)
         self.assertIn('--principals-allowed S-1-5-21-1-2-3-1604', command)
-        self.assertIn('--target-account Administrator', command)
+        self.assertIn('--target-account ACCOUNT_TO_SUCCEED', command)
         self.assertNotIn('<TARGET_ACCOUNT_DN_OR_SAM>', command)
         self.assertNotIn('hint', report['result']['next_steps'][0])
         self.assertNotIn('_next_step_candidates', report['result'])
@@ -915,6 +931,50 @@ class CLIBehaviorTests(unittest.TestCase):
         command = report['result']['next_steps'][0]['command']
         self.assertTrue(command.startswith('proxychains -f chain1080.conf -q dmsa-forge plan add'))
         self.assertIn('--dmsa-name redpen', command)
+
+    def test_rejected_dc_ip_next_step_reruns_current_action_first(self):
+        options = execution_options(
+            action='search',
+            account='eighteen.htb/adam.scott:iloveyou1',
+            dc_host='dc01.eighteen.htb',
+            dc_host_supplied=True,
+            include_sd=True,
+            next_step_prefix='proxychains -f chain1080.conf -q',
+        )
+        report = {
+            'inference': [
+                {
+                    'kind': 'dc_ip',
+                    'status': 'rejected',
+                    'detail': 'DNS resolved dc01.eighteen.htb to unusable address 224.0.0.1; pass --dc-ip to use a specific DC IPv4',
+                }
+            ],
+            'result': {
+                'mode': 'security_descriptor_analysis',
+                'ou_count': 1,
+                'identity_count': 1,
+                '_next_step_candidates': [
+                    {
+                        'identity': 'S-1-5-21-1-2-3-1604',
+                        'target_ou': 'OU=Staff,DC=eighteen,DC=htb',
+                    }
+                ],
+            }
+        }
+
+        cli.attach_next_steps(report, options, mode='execute', success=True)
+
+        steps = report['result']['next_steps']
+        self.assertEqual(len(steps), 1)
+        self.assertEqual(steps[0]['label'], 'Rerun with a real DC IPv4')
+        self.assertIn(
+            'proxychains -f chain1080.conf -q dmsa-forge search eighteen.htb/adam.scott:iloveyou1',
+            steps[0]['command'],
+        )
+        self.assertIn('--dc-host dc01.eighteen.htb', steps[0]['command'])
+        self.assertIn('--dc-ip REAL_DC_IPV4', steps[0]['command'])
+        self.assertNotIn('plan add', steps[0]['command'])
+        self.assertNotIn('_next_step_candidates', report['result'])
 
     def test_report_parsed_inputs_are_flat(self):
         result = run_cli('add', *BASE_ARGS, '--dry-run', '--output-only')
@@ -1823,10 +1883,140 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(forge.report['result']['bound_user']['status'], 'ok')
         self.assertTrue(forge.report['result']['bound_user']['token_groups_read'])
         self.assertEqual(forge.report['result']['bound_user']['group_sid_source'], 'tokenGroups')
+        self.assertEqual(forge.report['result']['bound_user']['effective_sid_sources'][group_sid], 'group SID from tokenGroups')
+        self.assertEqual(forge.report['result']['bound_account']['sam_account_name'], 'adam.scott')
         self.assertEqual(forge.report['result']['bound_user_match_count'], 1)
+        self.assertEqual(forge.report['result']['bound_account_match_count'], 1)
         self.assertEqual(forge.report['result']['identities'][0]['sid'], group_sid)
         self.assertEqual(forge.report['result']['identities'][0]['applies_to_bound_user'], 'yes')
+        self.assertEqual(forge.report['result']['identities'][0]['bound_account_match'], 'yes')
+        self.assertEqual(forge.report['result']['identities'][0]['bound_account_match_source'], 'group SID from tokenGroups')
         self.assertEqual(forge.report['result']['_next_step_candidates'][0]['identity'], group_sid)
+
+    def test_search_does_not_suggest_add_for_unmatched_bound_account(self):
+        rights_sid = 'S-1-5-21-1-2-3-1604'
+        unrelated_group_sid = 'S-1-5-21-1-2-3-2604'
+        user_sid = 'S-1-5-21-1-2-3-1101'
+
+        forge = minimal_forge()
+        forge._username = 'adam.scott'
+        forge._domain = 'test.local'
+        forge._search_summary = False
+        forge._search_include_sd = True
+        forge._search_resolve_names = False
+        forge._skip_dc_prereq = True
+        forge._target_ou = 'OU=Staff,DC=test,DC=local'
+        forge._options = execution_options(target_ou='OU=Staff,DC=test,DC=local', include_sd=True)
+
+        class UnmatchedRightsConnection:
+            def __init__(self):
+                self.bound = True
+                self.entries = []
+                self.result = {'result': 0, 'description': 'success', 'message': ''}
+
+            def search(self, search_base=None, search_filter=None, attributes=None, **kwargs):
+                if search_filter == '(objectClass=organizationalUnit)':
+                    self.entries = [
+                        cli._LDAPEntry(
+                            'OU=Staff,DC=test,DC=local',
+                            {
+                                'distinguishedName': ['OU=Staff,DC=test,DC=local'],
+                                'nTSecurityDescriptor': [b'fake-sd'],
+                            },
+                        )
+                    ]
+                    return True
+                if search_filter == '(objectClass=domain)':
+                    self.entries = [
+                        cli._LDAPEntry(
+                            'DC=test,DC=local',
+                            {'objectSid': ['S-1-5-21-1-2-3']},
+                        )
+                    ]
+                    return True
+                if search_filter and 'sAMAccountName=adam.scott' in search_filter:
+                    self.entries = [
+                        cli._LDAPEntry(
+                            'CN=adam.scott,OU=Staff,DC=test,DC=local',
+                            {
+                                'objectClass': ['top', 'person', 'user'],
+                                'objectSid': [user_sid],
+                                'primaryGroupID': ['513'],
+                                'sAMAccountName': ['adam.scott'],
+                            },
+                        )
+                    ]
+                    return True
+                if search_base == 'CN=adam.scott,OU=Staff,DC=test,DC=local' and attributes and 'tokenGroups' in attributes:
+                    self.entries = [
+                        cli._LDAPEntry(
+                            'CN=adam.scott,OU=Staff,DC=test,DC=local',
+                            {'tokenGroups': [unrelated_group_sid]},
+                        )
+                    ]
+                    return True
+                self.entries = []
+                return True
+
+        class FakeSid:
+            def __init__(self, sid):
+                self.sid = sid
+
+            def formatCanonical(self):
+                return self.sid
+
+        class FakeMask:
+            def __getitem__(self, key):
+                if key == 'Mask':
+                    return 0x10000000
+                raise KeyError(key)
+
+        class FakeAceData:
+            def __getitem__(self, key):
+                if key == 'Mask':
+                    return FakeMask()
+                if key == 'Sid':
+                    return FakeSid(rights_sid)
+                raise KeyError(key)
+
+        class FakeAce:
+            def __getitem__(self, key):
+                if key == 'AceType':
+                    return 0
+                if key == 'Ace':
+                    return FakeAceData()
+                raise KeyError(key)
+
+        class FakeDacl:
+            aces = [FakeAce()]
+
+        class FakeSD:
+            def __init__(self, data=None):
+                pass
+
+            def __getitem__(self, key):
+                if key == 'Dacl':
+                    return FakeDacl()
+                if key == 'OwnerSid':
+                    return FakeSid('S-1-5-18')
+                raise KeyError(key)
+
+        original_ldaptypes = cli.ldaptypes
+        try:
+            cli.ldaptypes = types.SimpleNamespace(
+                SR_SECURITY_DESCRIPTOR=FakeSD,
+                ACCESS_ALLOWED_ACE=types.SimpleNamespace(ACE_TYPE=0),
+            )
+            with contextlib.redirect_stderr(io.StringIO()):
+                success = forge.search_ous(UnmatchedRightsConnection())
+        finally:
+            cli.ldaptypes = original_ldaptypes
+
+        self.assertTrue(success)
+        self.assertEqual(forge.report['result']['identity_count'], 1)
+        self.assertEqual(forge.report['result']['bound_account_match_count'], 0)
+        self.assertEqual(forge.report['result']['identities'][0]['bound_account_match'], 'no')
+        self.assertEqual(forge.report['result']['_next_step_candidates'], [])
 
     def test_search_marks_rights_that_apply_to_bound_user_recursive_groups(self):
         group_sid = 'S-1-5-21-1-2-3-1604'
@@ -1966,8 +2156,142 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertFalse(forge.report['result']['bound_user']['token_groups_read'])
         self.assertTrue(forge.report['result']['bound_user']['group_sids_resolved'])
         self.assertEqual(forge.report['result']['bound_user']['group_sid_source'], 'recursive_group_membership')
+        self.assertEqual(forge.report['result']['bound_user']['effective_sid_sources'][group_sid], 'group SID from recursive membership')
         self.assertEqual(forge.report['result']['bound_user_match_count'], 1)
         self.assertEqual(forge.report['result']['identities'][0]['applies_to_bound_user'], 'yes')
+        self.assertEqual(forge.report['result']['identities'][0]['bound_account_match_source'], 'group SID from recursive membership')
+
+    def test_search_handles_object_specific_dmsa_create_child_aces(self):
+        principal_sid = 'S-1-5-21-1-2-3-1604'
+        user_sid = 'S-1-5-21-1-2-3-1104'
+        dmsa_guid = '0feb936f-47b3-49f2-9386-1dedc2c23765'
+
+        def run_with_object_type(object_type):
+            options = execution_options(
+                action='search',
+                include_sd=True,
+                search_summary=False,
+                skip_dc_prereq=True,
+            )
+            forge = cli.DMSAForge('adam.scott', 'pw', 'test.local', '', '', options)
+
+            class ObjectAceConnection:
+                def __init__(self):
+                    self.bound = True
+                    self.entries = []
+                    self.result = {'result': 0, 'description': 'success', 'message': ''}
+
+                def search(self, search_base=None, search_filter=None, attributes=None, **kwargs):
+                    if search_filter == '(objectClass=organizationalUnit)':
+                        self.entries = [
+                            cli._LDAPEntry(
+                                'OU=Staff,DC=test,DC=local',
+                                {'nTSecurityDescriptor': [b'fake-sd']},
+                            )
+                        ]
+                        return True
+                    if search_filter == '(objectClass=domain)':
+                        self.entries = [
+                            cli._LDAPEntry(
+                                'DC=test,DC=local',
+                                {'objectSid': ['S-1-5-21-1-2-3']},
+                            )
+                        ]
+                        return True
+                    if search_filter and 'sAMAccountName=adam.scott' in search_filter:
+                        self.entries = [
+                            cli._LDAPEntry(
+                                'CN=adam.scott,OU=Staff,DC=test,DC=local',
+                                {
+                                    'objectClass': ['top', 'person', 'user'],
+                                    'objectSid': [user_sid],
+                                    'primaryGroupID': ['513'],
+                                    'sAMAccountName': ['adam.scott'],
+                                    'cn': ['adam.scott'],
+                                    'name': ['adam.scott'],
+                                    'userPrincipalName': ['adam.scott@test.local'],
+                                },
+                            )
+                        ]
+                        return True
+                    if search_base == 'CN=adam.scott,OU=Staff,DC=test,DC=local' and attributes and 'tokenGroups' in attributes:
+                        self.entries = [
+                            cli._LDAPEntry(
+                                'CN=adam.scott,OU=Staff,DC=test,DC=local',
+                                {'tokenGroups': [principal_sid]},
+                            )
+                        ]
+                        return True
+                    self.entries = []
+                    return True
+
+            class FakeSid:
+                def __init__(self, sid):
+                    self.sid = sid
+
+                def formatCanonical(self):
+                    return self.sid
+
+            class FakeMask:
+                def __getitem__(self, key):
+                    if key == 'Mask':
+                        return 0x00000001
+                    raise KeyError(key)
+
+            class FakeAceData:
+                def __getitem__(self, key):
+                    if key == 'Mask':
+                        return FakeMask()
+                    if key == 'Sid':
+                        return FakeSid(principal_sid)
+                    if key == 'ObjectType':
+                        return object_type
+                    raise KeyError(key)
+
+            class FakeAce:
+                def __getitem__(self, key):
+                    if key == 'AceType':
+                        return 5
+                    if key == 'Ace':
+                        return FakeAceData()
+                    raise KeyError(key)
+
+            class FakeDacl:
+                aces = [FakeAce()]
+
+            class FakeSD:
+                def __init__(self, data=None):
+                    pass
+
+                def __getitem__(self, key):
+                    if key == 'Dacl':
+                        return FakeDacl()
+                    if key == 'OwnerSid':
+                        return FakeSid('S-1-5-18')
+                    raise KeyError(key)
+
+            original_ldaptypes = cli.ldaptypes
+            try:
+                cli.ldaptypes = types.SimpleNamespace(
+                    SR_SECURITY_DESCRIPTOR=FakeSD,
+                    ACCESS_ALLOWED_ACE=types.SimpleNamespace(ACE_TYPE=0),
+                    ACCESS_ALLOWED_OBJECT_ACE=types.SimpleNamespace(ACE_TYPE=5),
+                )
+                with contextlib.redirect_stderr(io.StringIO()):
+                    success = forge.search_ous(ObjectAceConnection())
+            finally:
+                cli.ldaptypes = original_ldaptypes
+
+            self.assertTrue(success)
+            return forge.report['result']
+
+        dmsa_result = run_with_object_type(dmsa_guid)
+        self.assertEqual(dmsa_result['identity_count'], 1)
+        self.assertEqual(dmsa_result['identities'][0]['sid'], principal_sid)
+        self.assertEqual(dmsa_result['identities'][0]['bound_account_match'], 'yes')
+
+        unrelated_result = run_with_object_type('11111111-1111-1111-1111-111111111111')
+        self.assertEqual(unrelated_result['identity_count'], 0)
 
     def test_search_falls_back_to_authenticated_account_ou_when_broad_ou_search_fails(self):
         class FallbackConnection:

