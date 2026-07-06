@@ -388,12 +388,12 @@ class CLIBehaviorTests(unittest.TestCase):
                 self.assertNotIn('Safety:', result.stdout)
                 self.assertNotIn('local controls:', result.stdout)
 
-    def test_doctor_help_flattens_local_controls(self):
+    def test_doctor_is_not_a_hidden_workflow(self):
         result = run_cli('doctor', '-h')
 
-        self.assertEqual(result.returncode, 0, msg=result.stderr)
-        assert_options_heading(self, result.stdout)
-        self.assertNotIn('local controls:', result.stdout)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('unrecognized action: doctor', result.stderr)
+        self.assertEqual(result.stdout, '')
 
     def test_action_help_prints_compact_header_without_banner_on_interactive_terminal(self):
         output = io.StringIO()
@@ -429,6 +429,23 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertIn('usage: dmsaforge assess', result.stdout)
         self.assertNotIn('--no-banner', result.stdout)
+        self.assertEqual(result.stderr, '')
+
+    def test_empty_plan_action_prints_target_action_help(self):
+        result = run_cli('plan', 'add')
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('usage: dmsaforge add', result.stdout)
+        self.assertIn('--principals-allowed', result.stdout)
+        self.assertNotIn('--dry-run', result.stderr)
+        self.assertEqual(result.stderr, '')
+
+    def test_plan_action_help_respects_no_banner(self):
+        result = run_cli('plan', 'add', '--no-banner')
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertTrue(result.stdout.startswith('usage: dmsaforge add'))
+        self.assertNotIn(' - by RedteamNotes', result.stdout)
         self.assertEqual(result.stderr, '')
 
     def test_single_dash_long_options_are_rejected(self):
@@ -1632,157 +1649,6 @@ class CLIBehaviorTests(unittest.TestCase):
 
         self.assertTrue(forge.is_excluded_sid('S-1-5-21-1-2-3-512', 'S-1-5-21-1-2-3'))
         self.assertFalse(forge.is_excluded_sid('S-1-5-21-1-2-30-512', 'S-1-5-21-1-2-3'))
-
-    def test_doctor_outputs_local_json_report(self):
-        result = run_cli('doctor', '--output-only')
-
-        self.assertIn(result.returncode, (0, 1), msg=result.stderr)
-        payload = json.loads(result.stdout)
-        self.assertEqual(payload['action'], 'doctor')
-        self.assertEqual(payload['mode'], 'doctor')
-        self.assertEqual(payload['ldap_operations'], [])
-        self.assertEqual(payload['inputs']['account'], '(not set)')
-        self.assertIn(payload['result']['readiness'], ('ready', 'warning', 'blocked'))
-        self.assertIn('recommendations', payload['result'])
-        check_names = {check['name'] for check in payload['result']['checks']}
-        self.assertNotIn('account domain hint', check_names)
-        self.assertNotIn('base DN', check_names)
-        self.assertNotIn('scope domain', check_names)
-        self.assertNotIn('scope base DN', check_names)
-
-    def test_doctor_accepts_workflow_hints_for_dn_checks(self):
-        result = run_cli(
-            'doctor',
-            'test.local/admin',
-            '--scope-domain',
-            'test.local',
-            '--target-ou',
-            'OU=Staff,DC=test,DC=local',
-            '--target-account',
-            'CN=Administrator,CN=Users,DC=test,DC=local',
-            '--principals-allowed',
-            'CN=Readers,CN=Users,DC=test,DC=local',
-            '--output-only',
-        )
-
-        self.assertIn(result.returncode, (0, 1), msg=result.stderr)
-        payload = json.loads(result.stdout)
-        checks = {check['name']: check for check in payload['result']['checks']}
-        self.assertEqual(checks['target OU']['status'], 'ok')
-        self.assertEqual(checks['target account DN']['status'], 'ok')
-        self.assertEqual(checks['principals-allowed DN']['status'], 'ok')
-
-    def test_doctor_text_output_is_concise_and_issue_only(self):
-        result = run_cli('doctor', 'test.local/admin:pw', '--scope-domain', 'test.local', '--no-banner')
-
-        self.assertIn(result.returncode, (0, 1), msg=result.stderr)
-        self.assertIn('doctor: readiness=', result.stdout)
-        self.assertNotIn('\n  fix:', result.stdout)
-        self.assertNotIn('[OK]', result.stdout)
-        self.assertNotIn('target OU', result.stdout)
-
-    def test_doctor_reports_invalid_principals_allowed_sid(self):
-        result = run_cli(
-            'doctor',
-            'test.local/admin',
-            '--scope-domain',
-            'test.local',
-            '--principals-allowed',
-            'S-1-bad',
-            '--output-only',
-        )
-
-        self.assertEqual(result.returncode, 1)
-        payload = json.loads(result.stdout)
-        checks = {check['name']: check for check in payload['result']['checks']}
-        self.assertEqual(checks['principals-allowed SID']['status'], 'error')
-
-    def test_doctor_reports_bad_scope_domain_as_json(self):
-        result = run_cli('doctor', 'test.local/admin', '--scope-domain', 'bad', '--output-only')
-
-        self.assertEqual(result.returncode, 1)
-        payload = json.loads(result.stdout)
-        checks = {check['name']: check for check in payload['result']['checks']}
-        self.assertEqual(payload['result']['readiness'], 'blocked')
-        self.assertEqual(checks['scope domain']['status'], 'error')
-
-    def test_doctor_kerberos_requires_krb5ccname_when_requested(self):
-        result = run_cli(
-            'doctor',
-            'test.local/admin',
-            '--kerberos',
-            '--dc-host',
-            'dc01.test.local',
-            '--output-only',
-            env_overrides={'KRB5CCNAME': None},
-        )
-
-        self.assertEqual(result.returncode, 1)
-        payload = json.loads(result.stdout)
-        checks = {check['name']: check for check in payload['result']['checks']}
-        self.assertTrue(payload['controls']['kerberos'])
-        self.assertEqual(checks['KRB5CCNAME']['status'], 'error')
-        self.assertIn('Export KRB5CCNAME', checks['KRB5CCNAME']['remediation'])
-
-    def test_doctor_kerberos_reports_missing_dc_host(self):
-        result = run_cli(
-            'doctor',
-            'test.local/admin',
-            '--kerberos',
-            '--output-only',
-            env_overrides={'KRB5CCNAME': None},
-        )
-
-        self.assertEqual(result.returncode, 1)
-        payload = json.loads(result.stdout)
-        checks = {check['name']: check for check in payload['result']['checks']}
-        self.assertEqual(checks['Kerberos DC hostname']['status'], 'error')
-        self.assertIn('--dc-host', checks['Kerberos DC hostname']['detail'])
-        self.assertIn('--dc-host', checks['Kerberos DC hostname']['remediation'])
-
-    def test_doctor_keeps_inline_account_without_hygiene_warning(self):
-        result = run_cli('doctor', 'test.local/admin:SuperSecret!', '--output-only')
-
-        self.assertIn(result.returncode, (0, 1), msg=result.stderr)
-        payload = json.loads(result.stdout)
-        checks = {check['name']: check for check in payload['result']['checks']}
-        self.assertNotIn('credential hygiene', checks)
-        self.assertEqual(payload['inputs']['account'], 'test.local/admin:SuperSecret!')
-
-    def test_doctor_kerberos_reports_file_cache_path(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cache_path = os.path.join(tmpdir, 'krb5cc_test')
-            with open(cache_path, 'w') as handle:
-                handle.write('not a real ccache')
-            result = run_cli(
-                'doctor',
-                'test.local/admin',
-                '--kerberos',
-                '--dc-host',
-                'dc01.test.local',
-                '--output-only',
-                env_overrides={'KRB5CCNAME': 'FILE:%s' % cache_path},
-            )
-
-        self.assertEqual(result.returncode, 1)
-        payload = json.loads(result.stdout)
-        checks = {check['name']: check for check in payload['result']['checks']}
-        self.assertEqual(checks['KRB5CCNAME']['status'], 'ok')
-        self.assertEqual(checks['ccache backend']['status'], 'ok')
-        self.assertEqual(checks['ccache file exists']['status'], 'ok')
-        self.assertEqual(checks['KRB5CCNAME']['detail'], 'FILE:%s' % cache_path)
-
-    def test_ccache_locator_and_realm_helpers(self):
-        file_locator = cli.parse_ccache_locator('FILE:/tmp/krb5cc_test')
-        dir_locator = cli.parse_ccache_locator('DIR:/tmp/krb5ccdir')
-        kcm_locator = cli.parse_ccache_locator('KCM:1000')
-        plain_locator = cli.parse_ccache_locator('/tmp/plain_cache')
-
-        self.assertTrue(file_locator['impacket_file_cache'])
-        self.assertEqual(dir_locator['scheme'], 'DIR')
-        self.assertFalse(kcm_locator['filesystem'])
-        self.assertEqual(plain_locator['scheme'], 'FILE')
-        self.assertEqual(cli.realm_from_principal_text('user@TEST.LOCAL'), 'TEST.LOCAL')
 
     def test_output_only_with_output_writes_json_without_stdout(self):
         with tempfile.TemporaryDirectory() as tmpdir:

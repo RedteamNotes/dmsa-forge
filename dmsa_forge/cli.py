@@ -79,9 +79,6 @@ DMSA_EXPECTED_DELEGATED_STATE = '2'
 DMSA_DELEGATED_STATE_MEANINGS = {
     '2': 'migration complete',
 }
-KRB5CCNAME_ENV = 'KRB5CCNAME'
-KRB5_CONFIG_ENV = 'KRB5_CONFIG'
-CCACHE_SCHEME_RE = re.compile(r'^([A-Za-z][A-Za-z0-9_-]*):(.*)$')
 ANSI_YELLOW = '\033[33m'
 ANSI_RED = '\033[31m'
 ANSI_BOLD_RED = '\033[1;31m'
@@ -181,13 +178,6 @@ except ImportError as e:
     impacket_ldap = None
     ldapasn1 = None
     _IMPACKET_IMPORT_ERROR = e
-
-try:
-    from impacket.krb5.ccache import CCache
-    _CCACHE_IMPORT_ERROR = None
-except ImportError as e:
-    CCache = None
-    _CCACHE_IMPORT_ERROR = e
 
 try:
     from pyasn1.codec.ber import encoder
@@ -2595,6 +2585,7 @@ class DMSAForge:
 
             errors = []
             warnings = []
+            expected_reader_sid_present = None
             if str(sam).lower() != ('%s$' % self._dmsa_name).lower():
                 errors.append('sAMAccountName does not match %s$' % self._dmsa_name)
             if str(state) != DMSA_EXPECTED_DELEGATED_STATE:
@@ -2609,8 +2600,10 @@ class DMSAForge:
                     errors.append('msDS-GroupMSAMembership is not a valid binary security descriptor: %s' % sd_error)
                 elif expected_sid:
                     if self._security_descriptor_contains_sid(membership, expected_sid):
+                        expected_reader_sid_present = True
                         log_kv('  expected reader SID:', '%s present' % expected_sid, width=35)
                     else:
+                        expected_reader_sid_present = False
                         message = 'expected reader SID %s is not present in msDS-GroupMSAMembership' % expected_sid
                         warnings.append(message)
                         log_kv('  expected reader SID:', '%s not present' % expected_sid, width=35)
@@ -2649,7 +2642,7 @@ class DMSAForge:
                     'msDS-ManagedAccountPrecededByLink': self._display_dn(predecessor),
                     'msDS-GroupMSAMembership': {
                         'expected_reader_sid': expected_sid or '',
-                        'expected_reader_sid_present': None if not expected_sid else not bool(warnings),
+                        'expected_reader_sid_present': expected_reader_sid_present,
                         'summary': membership_lines,
                     },
                 },
@@ -3408,12 +3401,6 @@ def format_value_for_display(value, base_dn=None, redact=True):
     return str(value)
 
 
-def format_path_for_display(path, redact=True):
-    if path in (None, ''):
-        return path
-    return str(path)
-
-
 def dn_rdns_for_display(dn):
     parts = split_unescaped(dn, {',', ';'})
     if not parts:
@@ -3435,144 +3422,6 @@ def effective_port(options):
     if options.port is not None:
         return options.port
     return 389 if options.method == 'LDAP' else 636
-
-
-def parse_ccache_locator(locator):
-    if locator in (None, ''):
-        return {
-            'raw': locator,
-            'scheme': None,
-            'value': None,
-            'path': None,
-            'filesystem': False,
-            'impacket_file_cache': False,
-        }
-
-    raw = str(locator)
-    if re.match(r'^[A-Za-z]:[\\/]', raw):
-        scheme = 'FILE'
-        value = raw
-    else:
-        match = CCACHE_SCHEME_RE.match(raw)
-        if match:
-            scheme = match.group(1).upper()
-            value = match.group(2)
-        else:
-            scheme = 'FILE'
-            value = raw
-
-    path = value if scheme in ('FILE', 'DIR') else None
-    return {
-        'raw': raw,
-        'scheme': scheme,
-        'value': value,
-        'path': path,
-        'filesystem': scheme in ('FILE', 'DIR'),
-        'impacket_file_cache': scheme == 'FILE',
-    }
-
-
-def display_ccache_locator(locator_info, redact=True):
-    if not locator_info or not locator_info.get('scheme'):
-        return '(not set)'
-    scheme = locator_info.get('scheme')
-    value = locator_info.get('value')
-    if scheme in ('FILE', 'DIR'):
-        return '%s:%s' % (scheme, format_path_for_display(value, redact=redact))
-    return '%s:<non-file cache>' % scheme
-
-
-def decode_maybe_bytes(value):
-    if value is None:
-        return None
-    if isinstance(value, bytes):
-        try:
-            return value.decode('utf-8')
-        except UnicodeDecodeError:
-            return value.decode('latin-1', errors='replace')
-    return str(value)
-
-
-def ccache_principal_text(ccache):
-    principal = getattr(ccache, 'principal', None)
-    if principal is None:
-        return None
-
-    if hasattr(principal, 'prettyPrint'):
-        try:
-            return decode_maybe_bytes(principal.prettyPrint())
-        except Exception:
-            pass
-
-    return decode_maybe_bytes(principal)
-
-
-def realm_from_principal_text(principal_text):
-    if not principal_text or '@' not in principal_text:
-        return None
-    realm = principal_text.rsplit('@', 1)[1].strip()
-    return realm.upper() if realm else None
-
-
-def expected_kerberos_realms(options):
-    candidates = []
-    for value in (
-        getattr(options, 'scope_domain', None),
-        domain_from_account_hint(getattr(options, 'account', '') or ''),
-        domain_from_base_dn(getattr(options, 'base_dn', None)),
-        domain_from_base_dn(getattr(options, 'scope_base_dn', None)),
-    ):
-        if value:
-            candidates.append(str(value).strip().strip('.').upper())
-
-    deduped = []
-    for candidate in candidates:
-        if candidate and candidate not in deduped:
-            deduped.append(candidate)
-    return deduped
-
-
-def ccache_file_checks(locator_info, redact=True):
-    path = locator_info.get('path') if locator_info else None
-    displayed_path = format_path_for_display(path, redact=redact)
-    checks = []
-
-    if not path:
-        checks.append(('ccache path', False, 'no filesystem path is available for this cache backend', 'warning'))
-        return checks
-
-    exists = os.path.exists(path)
-    checks.append(('ccache file exists', exists, displayed_path, 'error'))
-    if not exists:
-        return checks
-
-    is_file = os.path.isfile(path)
-    checks.append(('ccache file type', is_file, '%s is %s' % (displayed_path, 'a regular file' if is_file else 'not a regular file'), 'error'))
-    readable = os.access(path, os.R_OK)
-    checks.append(('ccache file readable', readable, displayed_path, 'error'))
-
-    try:
-        mode = os.stat(path).st_mode & 0o777
-        private = (mode & 0o077) == 0
-        checks.append(('ccache file permissions', private, '%s mode %03o' % (displayed_path, mode), 'warning'))
-    except OSError as e:
-        checks.append(('ccache file permissions', False, 'could not stat %s: %s' % (displayed_path, e), 'warning'))
-
-    return checks
-
-
-def load_ccache_for_doctor(locator_info):
-    if CCache is None:
-        return None, 'Impacket CCache parser is unavailable: %s' % _CCACHE_IMPORT_ERROR
-    if not locator_info or not locator_info.get('impacket_file_cache'):
-        return None, 'non-FILE ccache backend cannot be parsed as a single Impacket file cache'
-    path = locator_info.get('path')
-    if not path or not os.path.isfile(path) or not os.access(path, os.R_OK):
-        return None, 'ccache file is not readable'
-    try:
-        return CCache.loadFile(path), None
-    except Exception as e:
-        return None, str(e)
 
 
 def planned_dmsa_dn(options):
@@ -4068,22 +3917,6 @@ def command_for_search_add_plan(options, candidate):
     append_option(parts, '--dmsa-name', dmsa_name)
     append_option(parts, '--principals-allowed', principal)
     append_option(parts, '--target-account', target_account)
-    return apply_next_step_prefix(' '.join(shlex.quote(part) for part in parts), options)
-
-
-def command_for_doctor(options):
-    parts = [TOOL_NAME, 'doctor']
-    if options.account:
-        parts.append(options.account)
-    append_connection_options(parts, options)
-    if options.target_ou:
-        append_option(parts, '--ou', options.target_ou)
-    if options.dmsa_name:
-        append_option(parts, '--dmsa-name', options.dmsa_name)
-    if options.target_account:
-        append_option(parts, '--target-account', options.target_account)
-    if options.k:
-        append_option(parts, '--kerberos', True)
     return apply_next_step_prefix(' '.join(shlex.quote(part) for part in parts), options)
 
 
@@ -4633,23 +4466,6 @@ def build_subcommand_parser():
     return parser
 
 
-def build_doctor_parser():
-    doctor_parser = argparse.ArgumentParser(
-        prog='%s doctor' % TOOL_NAME,
-        description='Check local dependencies, inferred values, scope, and DN syntax without opening LDAP.',
-        formatter_class=WideHelpFormatter,
-    )
-    doctor_parser.set_defaults(action='doctor', command='doctor', action_first=True)
-    doctor_parser.add_argument('account', nargs='?', default='', metavar='[domain/]username[:password]', help='Optional account hint for domain/base DN derivation.')
-    add_dmsa_workflow_options(doctor_parser, 'add')
-    add_common_local_options(doctor_parser, include_workflow=False)
-    add_connection_options(doctor_parser, include_auth=False)
-    kerberos = doctor_parser.add_argument_group('Kerberos')
-    kerberos.add_argument('--kerberos', '-k', dest='k', action='store_true', help='Require Kerberos ccache readiness checks to pass.')
-    add_common_advanced_options(doctor_parser, include_workflow=False)
-    return doctor_parser
-
-
 def normalize_plan_shortcut(argv):
     if not argv or argv[0] != 'plan':
         return list(argv)
@@ -4659,7 +4475,15 @@ def normalize_plan_shortcut(argv):
     action = argv[1]
     if action not in ACTION_CHOICES:
         raise ValueError('Unknown plan action "%s". Known actions: %s' % (action, ', '.join(ACTION_CHOICES)))
-    planned = [action] + list(argv[2:])
+    tail = list(argv[2:])
+    if any(arg in ('-h', '--help') for arg in tail):
+        print_action_help(action, no_banner='--no-banner' in tail)
+        return None
+    non_display_args = [arg for arg in tail if arg != '--no-banner']
+    if not non_display_args:
+        print_action_help(action, no_banner='--no-banner' in tail)
+        return None
+    planned = [action] + tail
     if not option_supplied(planned, OPTION_ALIASES['dry_run']):
         planned.append('--dry-run')
     return planned
@@ -4748,29 +4572,23 @@ def prepare_cli_options(parser, options):
         options.include_sd = True
 
     if options.scope_domain:
-        diagnostic_action = options.action == 'doctor'
         options.scope_domain = options.scope_domain.strip().lower()
         if not validate_domain_name(options.scope_domain):
-            if diagnostic_action:
-                return
             parser.error('--scope-domain must be a DNS domain such as redteamnotes.com')
 
         scope_domain_dn = domain_to_base_dn(options.scope_domain)
         if options.scope_base_dn is None:
             options.scope_base_dn = scope_domain_dn
         elif not validate_dn_syntax(options.scope_base_dn):
-            if not diagnostic_action:
-                parser.error('--scope-base-dn is not a valid distinguished name')
+            parser.error('--scope-base-dn is not a valid distinguished name')
         elif not dn_in_scope(options.scope_base_dn, scope_domain_dn):
-            if not diagnostic_action:
-                parser.error('--scope-base-dn must be equal to or inside --scope-domain')
+            parser.error('--scope-base-dn must be equal to or inside --scope-domain')
 
         if options.base_dn is None:
             options.base_dn = scope_domain_dn
 
         if account_domain and '.' in account_domain and account_domain.lower() != options.scope_domain:
-            if not diagnostic_action:
-                parser.error('account domain is outside --scope-domain')
+            parser.error('account domain is outside --scope-domain')
 
 
 def validate_reporting_options(parser, options):
@@ -4940,467 +4758,6 @@ def parse_account(options):
         options.k,
     )
     return domain, username, password, lmhash, nthash
-
-
-def doctor_check(checks, name, ok, detail='', severity='error', remediation=''):
-    check = {
-        'name': name,
-        'status': 'ok' if ok else severity,
-        'detail': detail,
-        'remediation': '' if ok else remediation,
-    }
-    checks.append(check)
-    return check
-
-
-def readiness_from_checks(checks):
-    if any(check.get('status') == 'error' for check in checks):
-        return 'blocked'
-    if any(check.get('status') == 'warning' for check in checks):
-        return 'warning'
-    return 'ready'
-
-
-def recommendations_from_checks(checks):
-    recommendations = []
-    for check in checks:
-        remediation = check.get('remediation')
-        if check.get('status') in ('error', 'warning') and remediation:
-            recommendations.append({
-                'check': check.get('name'),
-                'status': check.get('status'),
-                'remediation': remediation,
-            })
-    return recommendations
-
-
-def append_scope_relationship_checks(checks, options):
-    if not (options.scope_domain and validate_domain_name(options.scope_domain)):
-        return
-
-    scope_domain_dn = domain_to_base_dn(options.scope_domain)
-    if options.scope_base_dn and validate_dn_syntax(options.scope_base_dn):
-        doctor_check(
-            checks,
-            'scope base DN inside scope domain',
-            dn_in_scope(options.scope_base_dn, scope_domain_dn),
-            'scope_base_dn=%s scope_domain=%s' % (
-                report_ready_value(options.scope_base_dn, options),
-                options.scope_domain,
-            ),
-            remediation='Adjust --scope-base-dn so it is equal to or inside the DN derived from --scope-domain.',
-        )
-
-    account_domain = domain_from_account_hint(options.account)
-    if account_domain and '.' in account_domain:
-        doctor_check(
-            checks,
-            'account domain inside scope domain',
-            account_domain.lower() == options.scope_domain,
-            'account_domain=%s scope_domain=%s' % (account_domain.lower(), options.scope_domain),
-            remediation='Use an account from the authorized --scope-domain, or correct the configured scope.',
-        )
-
-
-def append_workflow_value_checks(checks, options):
-    if options.dmsa_name:
-        doctor_check(
-            checks,
-            'dMSA name',
-            validate_dmsa_name(options.dmsa_name),
-            normalized_dmsa_name(options.dmsa_name),
-            remediation='Use a DNS-safe dMSA name such as redpen or dMSA-REDPEN01; avoid commas, equals, slashes, spaces, underscores, and trailing hyphens.',
-        )
-    if options.dns_hostname:
-        doctor_check(
-            checks,
-            'DNS hostname',
-            validate_dns_hostname(options.dns_hostname),
-            options.dns_hostname,
-            remediation='Use a fully qualified DNS hostname such as redpen.redteamnotes.com.',
-        )
-
-
-def append_kerberos_doctor_checks(checks, options):
-    kerberos_required = bool(getattr(options, 'k', False))
-    doctor_check(
-        checks,
-        'Kerberos requested',
-        True,
-        'required by --kerberos' if kerberos_required else 'optional; pass --kerberos to require cache readiness',
-    )
-
-    if kerberos_required:
-        doctor_check(
-            checks,
-            'Kerberos DC hostname',
-            bool(options.dc_host),
-            options.dc_host or 'execution with --kerberos requires --dc-host for SPN/realm correctness',
-            remediation='Add --dc-host dc01.example.local for Kerberos execution.',
-        )
-
-    krb5_config = os.environ.get(KRB5_CONFIG_ENV)
-    if krb5_config:
-        readable = os.path.isfile(krb5_config) and os.access(krb5_config, os.R_OK)
-        doctor_check(
-            checks,
-            KRB5_CONFIG_ENV,
-            readable,
-            format_path_for_display(krb5_config, redact=options.redact),
-            severity='warning',
-            remediation='Point KRB5_CONFIG at a readable krb5.conf file, or unset it if the default system config is intended.',
-        )
-
-    ccache_value = os.environ.get(KRB5CCNAME_ENV)
-    locator_info = parse_ccache_locator(ccache_value)
-    if not ccache_value:
-        if not kerberos_required:
-            doctor_check(
-                checks,
-                KRB5CCNAME_ENV,
-                True,
-                'not set; Kerberos cache checks skipped because --kerberos was not requested',
-            )
-            return
-        doctor_check(
-            checks,
-            KRB5CCNAME_ENV,
-            False,
-            'environment variable is not set',
-            severity='error',
-            remediation='Export KRB5CCNAME=FILE:/path/to/ccache, or omit --kerberos for NTLM/password workflows.',
-        )
-        return
-
-    doctor_check(
-        checks,
-        KRB5CCNAME_ENV,
-        True,
-        display_ccache_locator(locator_info, redact=options.redact),
-    )
-
-    scheme = locator_info.get('scheme')
-    if locator_info.get('impacket_file_cache'):
-        doctor_check(checks, 'ccache backend', True, 'FILE cache is directly readable by Impacket')
-    elif scheme == 'DIR':
-        doctor_check(
-            checks,
-            'ccache backend',
-            False,
-            'DIR cache collections are not validated as a single Impacket FILE cache; point KRB5CCNAME at FILE:/path/to/cache for this tool',
-            severity='error' if kerberos_required else 'warning',
-            remediation='Export KRB5CCNAME=FILE:/path/to/ccache that Impacket can parse directly.',
-        )
-    else:
-        doctor_check(
-            checks,
-            'ccache backend',
-            False,
-            '%s backend is not filesystem-readable by this local doctor' % scheme,
-            severity='error' if kerberos_required else 'warning',
-            remediation='Use a FILE ccache for this tool, for example KRB5CCNAME=FILE:/tmp/krb5cc_operator.',
-        )
-
-    if locator_info.get('filesystem'):
-        for name, ok, detail, default_severity in ccache_file_checks(locator_info, redact=options.redact):
-            severity = default_severity if kerberos_required or default_severity == 'warning' else 'warning'
-            remediation = ''
-            if name == 'ccache file exists':
-                remediation = 'Refresh or create the cache, then point KRB5CCNAME at the correct FILE path.'
-            elif name == 'ccache file type':
-                remediation = 'Point KRB5CCNAME at a regular ccache file.'
-            elif name == 'ccache file readable':
-                remediation = 'Fix local file permissions so the current user can read the ccache.'
-            elif name == 'ccache file permissions':
-                remediation = 'Restrict the cache file, for example chmod 600 /path/to/ccache.'
-            doctor_check(checks, name, ok, detail, severity=severity, remediation=remediation)
-
-    ccache, parse_error = load_ccache_for_doctor(locator_info)
-    if parse_error:
-        doctor_check(
-            checks,
-            'ccache parse',
-            False,
-            parse_error,
-            severity='error' if kerberos_required and locator_info.get('impacket_file_cache') else 'warning',
-            remediation='Refresh the cache with kinit, or export KRB5CCNAME to a valid Impacket-readable FILE ccache.',
-        )
-        return
-
-    principal_text = ccache_principal_text(ccache)
-    if principal_text:
-        doctor_check(checks, 'ccache principal', True, principal_text)
-    else:
-        doctor_check(
-            checks,
-            'ccache principal',
-            False,
-            'could not extract default principal from ccache',
-            severity='error' if kerberos_required else 'warning',
-            remediation='Refresh the ccache and confirm it contains a default principal.',
-        )
-
-    cache_realm = realm_from_principal_text(principal_text)
-    if cache_realm:
-        doctor_check(checks, 'ccache realm', True, cache_realm)
-    else:
-        doctor_check(
-            checks,
-            'ccache realm',
-            False,
-            'could not infer realm from ccache principal',
-            severity='error' if kerberos_required else 'warning',
-            remediation='Use a ccache whose default principal includes a realm such as user@EXAMPLE.LOCAL.',
-        )
-
-    expected_realms = expected_kerberos_realms(options)
-    if not expected_realms:
-        doctor_check(
-            checks,
-            'realm mapping',
-            False,
-            'no account, scope, or base DN domain is available for comparison',
-            severity='warning',
-            remediation='Provide an account domain, --scope-domain, or --base-dn so doctor can compare realms.',
-        )
-    elif cache_realm:
-        realm_matches = cache_realm in expected_realms
-        doctor_check(
-            checks,
-            'realm mapping',
-            realm_matches,
-            'cache realm=%s expected=%s' % (cache_realm, ','.join(expected_realms)),
-            severity='error' if kerberos_required else 'warning',
-            remediation='Use a ccache for the expected realm, or adjust the account/scope/base DN to the authorized realm.',
-        )
-
-
-def build_doctor_report(options):
-    checks = []
-    workflow_hints_present = any((
-        options.dmsa_name,
-        options.target_account,
-        options.principals_allowed,
-        options.dns_hostname,
-    ))
-    scope_inputs_present = any((
-        options.account,
-        options.base_dn,
-        options.scope_domain,
-        options.scope_base_dn,
-        options.target_ou,
-        workflow_hints_present,
-    ))
-
-    missing_deps = missing_runtime_dependencies()
-    doctor_check(
-        checks,
-        'runtime dependencies',
-        not missing_deps,
-        'all required runtime imports are available' if not missing_deps else '; '.join(missing_deps),
-        remediation='Install the package in the active environment with python -m pip install ., or install impacket and pyasn1.',
-    )
-
-    account_domain = domain_from_account_hint(options.account) if options.account else None
-    if account_domain:
-        doctor_check(checks, 'account domain hint', True, account_domain)
-    elif options.account:
-        doctor_check(
-            checks,
-            'account domain hint',
-            False,
-            'no account domain hint supplied',
-            severity='warning',
-            remediation='Use DOMAIN/user syntax, or pass --scope-domain/--base-dn explicitly.',
-        )
-
-    base_dn = current_base_dn(options)
-    if base_dn or scope_inputs_present:
-        doctor_check(
-            checks,
-            'base DN',
-            bool(base_dn and validate_dn_syntax(base_dn)),
-            base_dn or 'base DN is not set and could not be derived',
-            severity='warning',
-            remediation='Set --base-dn or --scope-domain, or use an account domain such as example.local/user.',
-        )
-
-    if options.scope_domain:
-        doctor_check(
-            checks,
-            'scope domain',
-            validate_domain_name(options.scope_domain),
-            options.scope_domain,
-            remediation='Use a DNS domain such as redteamnotes.com.',
-        )
-    elif workflow_hints_present:
-        doctor_check(
-            checks,
-            'scope domain',
-            False,
-            'not set',
-            severity='warning',
-            remediation='Use DOMAIN/user syntax or pass --scope-domain for an authorized-domain guardrail.',
-        )
-
-    if options.scope_base_dn:
-        doctor_check(
-            checks,
-            'scope base DN',
-            validate_dn_syntax(options.scope_base_dn),
-            options.scope_base_dn,
-            remediation='Use a valid distinguished name such as DC=eighteen,DC=htb.',
-        )
-        if base_dn:
-            doctor_check(
-                checks,
-                'base DN inside scope',
-                dn_in_scope(base_dn, options.scope_base_dn),
-                'base_dn=%s scope_base_dn=%s' % (
-                    report_ready_value(base_dn, options),
-                    report_ready_value(options.scope_base_dn, options),
-                ),
-                remediation='Adjust --base-dn or --scope-base-dn so the base DN is equal to or inside the authorized scope.',
-            )
-    elif workflow_hints_present:
-        doctor_check(
-            checks,
-            'scope base DN',
-            False,
-            'not set',
-            severity='warning',
-            remediation='Set --scope-base-dn or --scope-domain before running write actions.',
-        )
-
-    append_scope_relationship_checks(checks, options)
-    append_workflow_value_checks(checks, options)
-
-    if options.target_ou:
-        target_ou_ok = validate_dn_syntax(options.target_ou)
-        if target_ou_ok and options.scope_base_dn:
-            target_ou_ok = dn_in_scope(options.target_ou, options.scope_base_dn)
-        doctor_check(
-            checks,
-            'target OU',
-            target_ou_ok,
-            report_ready_value(options.target_ou, options),
-            remediation='Set a valid --ou DN that is inside --scope-base-dn.',
-        )
-    elif workflow_hints_present:
-        doctor_check(
-            checks,
-            'target OU',
-            False,
-            'not set',
-            severity='warning',
-            remediation='Pass --ou for add/verify/delete workflows.',
-        )
-
-    if options.target_account and looks_like_dn(options.target_account):
-        target_account_ok = validate_dn_syntax(options.target_account)
-        if target_account_ok and options.scope_base_dn:
-            target_account_ok = dn_in_scope(options.target_account, options.scope_base_dn)
-        doctor_check(
-            checks,
-            'target account DN',
-            target_account_ok,
-            report_ready_value(options.target_account, options),
-            remediation='Use a valid target account DN inside --scope-base-dn, or use a sAMAccountName for LDAP resolution.',
-        )
-
-    if options.principals_allowed:
-        if str(options.principals_allowed).upper().startswith('S-'):
-            doctor_check(
-                checks,
-                'principals-allowed SID',
-                validate_sid_syntax(options.principals_allowed),
-                options.principals_allowed,
-                remediation='Use a canonical SID such as S-1-5-21-... or pass a full DN/name for LDAP resolution.',
-            )
-        elif looks_like_dn(options.principals_allowed):
-            principals_allowed_ok = validate_dn_syntax(options.principals_allowed)
-            if principals_allowed_ok and options.scope_base_dn and validate_dn_syntax(options.scope_base_dn):
-                principals_allowed_ok = dn_in_scope(options.principals_allowed, options.scope_base_dn)
-            doctor_check(
-                checks,
-                'principals-allowed DN',
-                principals_allowed_ok,
-                report_ready_value(options.principals_allowed, options),
-                remediation='Use a valid principal DN inside --scope-base-dn, or pass a SID to avoid LDAP name resolution.',
-            )
-
-    method_port = effective_port(options)
-    doctor_check(
-        checks,
-        'LDAP method and port',
-        (options.method, method_port) in (('LDAP', 389), ('LDAPS', 636)),
-        '%s/%s' % (options.method, method_port),
-        remediation='Use LDAP/389 or LDAPS/636; omit --port to use the default for the selected method.',
-    )
-
-    append_kerberos_doctor_checks(checks, options)
-
-    readiness = readiness_from_checks(checks)
-    errors = [check for check in checks if check['status'] == 'error']
-    warnings = [check for check in checks if check['status'] == 'warning']
-    result = {
-        'readiness': readiness,
-        'checks': checks,
-        'error_count': len(errors),
-        'warning_count': len(warnings),
-        'recommendations': recommendations_from_checks(checks),
-    }
-    return build_operation_report(options, mode='doctor', success=(len(errors) == 0), result=result)
-
-
-def doctor_report_to_text(report):
-    result = report.get('result', {})
-    checks = result.get('checks', [])
-    issues = [check for check in checks if check.get('status') != 'ok']
-    lines = [
-        'doctor: readiness=%s success=%s warnings=%s errors=%s operation_id=%s' % (
-            result.get('readiness', 'unknown'),
-            report.get('success'),
-            result.get('warning_count', 0),
-            result.get('error_count', 0),
-            report.get('operation_id'),
-        )
-    ]
-    if not issues:
-        lines.append('doctor: no local issues found')
-    for check in issues:
-        detail = check.get('detail') or ''
-        remediation = check.get('remediation') or ''
-        suffix = ''
-        if detail:
-            suffix += ': %s' % detail
-        if remediation:
-            suffix += ' | fix: %s' % remediation
-        lines.append('[%s] %s%s' % (
-            str(check.get('status')).upper(),
-            check.get('name'),
-            suffix,
-        ))
-    return '\n'.join(lines) + '\n'
-
-
-def run_doctor(options):
-    report = build_doctor_report(options)
-    attach_next_steps(report, options, mode='doctor', success=report.get('success'))
-    if options.json or options.output_only:
-        if not emit_report(options, report):
-            return 1
-    else:
-        text = doctor_report_to_text(report)
-        sys.stdout.write(text)
-        print_next_steps(options, report)
-        if options.output:
-            try:
-                write_output_file(options.output, text)
-            except Exception as e:
-                sys.stderr.write('Could not write output file %s: %s\n' % (options.output, e))
-                return 1
-    return 0 if report.get('success') else 1
 
 
 def command_to_text(parts):
@@ -5654,10 +5011,7 @@ def _main(argv=None):
             return 0
         argv = normalized_plan
 
-    if argv[0] == 'doctor':
-        parser = build_doctor_parser()
-        parse_argv = list(argv[1:])
-    elif argv[0] in SUBCOMMAND_CHOICES:
+    if argv[0] in SUBCOMMAND_CHOICES:
         parser = build_subcommand_parser()
         parse_argv = list(argv)
     else:
@@ -5675,14 +5029,8 @@ def _main(argv=None):
 
     apply_profile(parser, options, parse_argv)
     prepare_cli_options(parser, options)
-    if options.action == 'doctor':
-        validate_reporting_options(parser, options)
-    else:
-        validate_cli_options(parser, options)
+    validate_cli_options(parser, options)
     configure_logging(options)
-
-    if options.action == 'doctor':
-        return run_doctor(options)
 
     if options.dry_run:
         if should_show_banner(options):
