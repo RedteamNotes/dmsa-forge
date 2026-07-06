@@ -761,6 +761,20 @@ class CLIBehaviorTests(unittest.TestCase):
         command = payload['result']['next_steps'][0]['command']
         self.assertEqual(command, 'dmsa-forge assess test.local/admin:pw')
 
+    def test_assess_summary_dry_run_next_step_preserves_summary(self):
+        result = run_cli(
+            'plan',
+            'assess',
+            'test.local/admin:pw',
+            '--summary',
+            '--output-only',
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        command = payload['result']['next_steps'][0]['command']
+        self.assertEqual(command, 'dmsa-forge assess test.local/admin:pw --summary')
+
     def test_add_execution_requires_target_account_and_principals_allowed(self):
         result = run_cli(
             'add',
@@ -996,7 +1010,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(report['result']['next_steps'], [])
 
     def test_assess_next_step_keeps_security_descriptor_when_resolving_names(self):
-        options = execution_options(action='assess', include_sd=True, resolve_names=False)
+        options = execution_options(action='assess', include_sd=True, resolve_names=False, search_summary=True)
         report = {
             'result': {
                 'mode': 'summary',
@@ -1009,6 +1023,16 @@ class CLIBehaviorTests(unittest.TestCase):
         command = report['result']['next_steps'][0]['command']
         self.assertIn('--include-security-descriptor', command)
         self.assertIn('--resolve-names', command)
+        self.assertNotIn('--summary', command)
+
+    def test_completion_script_includes_summary_option(self):
+        zsh = run_cli('--completion-script', 'zsh')
+        bash = run_cli('--completion-script', 'bash')
+
+        self.assertEqual(zsh.returncode, 0, msg=zsh.stderr)
+        self.assertEqual(bash.returncode, 0, msg=bash.stderr)
+        self.assertIn('--summary', zsh.stdout)
+        self.assertIn('--summary', bash.stdout)
 
     def test_search_next_steps_start_with_add_plan_for_discovered_candidate(self):
         options = execution_options(

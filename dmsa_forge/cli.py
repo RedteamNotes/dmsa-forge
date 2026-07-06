@@ -3824,6 +3824,7 @@ def append_workflow_options(
     kerberos_guidance=None,
     include_security_descriptor=None,
     resolve_names=None,
+    search_summary=None,
     yes=None,
     dmsa_name=None,
     target_account=None,
@@ -3853,6 +3854,8 @@ def append_workflow_options(
         append_option(parts, '--target-ou', options.target_ou)
         include_sd = options.include_sd if include_security_descriptor is None else include_security_descriptor
         resolve = options.resolve_names if resolve_names is None else resolve_names
+        summary = options.search_summary if search_summary is None else search_summary
+        append_option(parts, '--summary', True if summary else None)
         append_option(parts, '--include-security-descriptor', True if (include_security_descriptor is True or (include_sd and resolve)) else None)
         append_option(parts, '--resolve-names', True if resolve else None)
         append_option(parts, '--skip-dc-prereq', True if options.skip_dc_prereq else None)
@@ -4062,7 +4065,7 @@ def build_next_steps(options, mode, success, result=None, report=None):
                 command_for_search_add_plan(step_options, candidates[0]),
             )
         elif not (options.include_sd and options.resolve_names):
-            add('Resolve matching SID names', command_for_action(options.action, step_options, include_security_descriptor=True, resolve_names=True))
+            add('Resolve matching SID names', command_for_action(options.action, step_options, include_security_descriptor=True, resolve_names=True, search_summary=False))
     elif options.action == 'delete':
         add('Confirm cleanup with assess', command_for_action('assess', step_options))
     return steps
@@ -5347,7 +5350,7 @@ def completion_script(shell):
         '--scope-domain', '--scope-base-dn',
         '--dc-host', '--dc-ip',
         '--method', '--port',
-        '--include-security-descriptor', '--resolve-names',
+        '--summary', '--include-security-descriptor', '--resolve-names',
     ])
     if shell == 'bash':
         return '''# dmsa-forge bash completion
