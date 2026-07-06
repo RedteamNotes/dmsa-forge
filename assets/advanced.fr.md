@@ -8,11 +8,10 @@ Utilisez l'aide par action pour obtenir une liste d'options plus courte et plus 
 
 ```bash
 dmsa-forge add -h
-dmsa-forge search -h
-dmsa-forge add --help-advanced
+dmsa-forge assess -h
 ```
 
-L'aide par action reste volontairement courte. Utilisez `--help-advanced` sur une action pour afficher les options d'authentification, les alias de compatibilite, les controles de retry de verification et les options avancees de workflow.
+L'aide par action reste volontairement courte. Les details d'authentification, de reporting, de retry et de compatibilite restent dans ce document au lieu d'alourdir l'aide terminale.
 
 ## Valeurs Par Défaut Inférées
 
@@ -29,7 +28,7 @@ dMSA Forge garde l'état d'exécution visible dans la ligne de commande et ne ch
 - `--dns-hostname` vaut `<dmsa-name>.<account-domain>` lorsque `--dmsa-name` est défini.
 - Pour l'exécution réelle de `add`, `--principals-allowed` est requis et définit le SID écrit dans `msDS-GroupMSAMembership`.
 - La résolution automatique de l'IP du DC utilise uniquement le DNS local. Elle ne lance ni ping ni sonde, et rejette les adresses à usage spécial avant de les utiliser dans les suggestions Kerberos.
-- Pour `search`, `--target-ou` réduit la base de recherche OU, et la vérification préalable du DC est best-effort.
+- Pour `assess`, `--target-ou` réduit la base d'évaluation OU, et la vérification préalable du DC est best-effort.
 
 Les options explicites remplacent toujours les valeurs inférées. Utilisez `--dc-host` pour cibler un DC précis, et `--dc-ip` seulement lorsque DNS ou le routage exige une adresse IP explicite. Les décisions d'inférence et les candidats de connexion sont consignés dans la sortie terminale et les rapports structurés.
 
@@ -44,7 +43,7 @@ Les commandes `next_steps` générées héritent du wrapper proxychains détect�
 `dmsa-forge plan ACTION ...` est un raccourci pour `dmsa-forge ACTION ... --dry-run`.
 
 ```bash
-dmsa-forge plan add eighteen.htb/user --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account ACCOUNT_TO_SUCCEED --principals-allowed SID_OR_NAME
+dmsa-forge plan add redteamnotes.com/operator --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account Administrator --principals-allowed SID_OR_NAME
 ```
 
 Il utilise la meme validation et le meme format de rapport que le mode dry-run.
@@ -69,6 +68,17 @@ Les rapports JSON structures incluent :
 
 Utilisez `--output-only --output FILE` pour une sortie JSON uniquement fichier avec le mode `0600`.
 
+## Sortie Terminale
+
+La sortie terminale normale reste legere et groupee par objectif :
+
+- `Run context` : valeurs de commande parsees, valeurs inferees, DC cible, methode LDAP, mode d'authentification et base DN ;
+- `Progress` : evenements de connexion et de workflow LDAP ;
+- `Findings` : resultats importants pour l'operateur, notamment droits OU, verification dMSA et etat du nettoyage ;
+- `Next steps` : commandes de suivi concretes lorsque le run a reussi ou peut continuer.
+
+Les warnings et erreurs utilisent des marqueurs de severite et la couleur lorsque stderr est un TTY. Les memes donnees restent disponibles dans les rapports JSON sans formatage terminal.
+
 ## Depannage
 
 Les echecs des actions LDAP conservent autant que possible le point de decision local dans la sortie structuree. Consultez `result.error_code`, `result.error` et, lorsqu'ils existent, `result.ldap_result` ou `result.verification_errors`.
@@ -76,11 +86,11 @@ Les echecs des actions LDAP conservent autant que possible le point de decision 
 Les erreurs locales courantes sont bloquees avant l'execution LDAP :
 
 - `--dmsa-name` doit etre un label DNS-safe comme `redpen` ou `dMSA-REDPEN01` ;
-- `--dns-hostname` doit etre un hostname DNS complet comme `redpen.eighteen.htb` ;
+- `--dns-hostname` doit etre un hostname DNS complet comme `redpen.redteamnotes.com` ;
 - pour les workflows d'execution, `--scope-domain` et `--scope-base-dn` doivent etre coherents.
 
 ## Compatibilite
 
-`--lean` est le preset court recommande pour une sortie locale plus legere et des recherches plus sobres. `--low-noise` reste disponible comme alias de compatibilite.
+`--lean` est le preset court pour une sortie locale plus legere et des evaluations plus sobres.
 
 L'ancien workflow `modify` a ete supprime. Utilisez `delete`, `add` et `verify` ; les anciennes commandes `modify` renvoient une erreur de migration au lieu d'atteindre LDAP.

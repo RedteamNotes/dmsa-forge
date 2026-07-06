@@ -8,11 +8,10 @@ Use action-specific help for the shortest useful option list:
 
 ```bash
 dmsa-forge add -h
-dmsa-forge search -h
-dmsa-forge add --help-advanced
+dmsa-forge assess -h
 ```
 
-Default action help is intentionally short. Use `--help-advanced` on an action to show authentication, compatibility aliases, verification retry controls, and advanced workflow flags.
+Action help is intentionally short. Keep detailed authentication, reporting, retry, and compatibility behavior in this document instead of expanding terminal help.
 
 ## Inferred Defaults
 
@@ -29,7 +28,7 @@ dMSA Forge keeps runtime state visible in the command line and does not load pro
 - `--dns-hostname` defaults to `<dmsa-name>.<account-domain>` when `--dmsa-name` is set.
 - For `add` execution, `--principals-allowed` is required and defines the SID written to `msDS-GroupMSAMembership`.
 - Automatic DC IP resolution is local DNS only. It does not ping or probe, and it rejects special-use results before using them for Kerberos command guidance.
-- For `search`, `--target-ou` narrows the OU search base, and the Domain Controller prerequisite check is best-effort.
+- For `assess`, `--target-ou` narrows the OU assessment base, and the Domain Controller prerequisite check is best-effort.
 
 Explicit flags always override inferred values. Use `--dc-host` for a specific DC hostname and `--dc-ip` only when DNS or routing requires an IP override. Inference decisions and connection candidates are recorded in terminal output and structured reports.
 
@@ -44,7 +43,7 @@ Generated `next_steps` commands inherit a detected proxychains wrapper, so a run
 `dmsa-forge plan ACTION ...` is shorthand for `dmsa-forge ACTION ... --dry-run`.
 
 ```bash
-dmsa-forge plan add eighteen.htb/user --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account ACCOUNT_TO_SUCCEED --principals-allowed SID_OR_NAME
+dmsa-forge plan add redteamnotes.com/operator --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account Administrator --principals-allowed SID_OR_NAME
 ```
 
 It uses the same validation and report format as normal dry-run mode.
@@ -69,6 +68,17 @@ Structured JSON reports include:
 
 Use `--output-only --output FILE` for file-only JSON output with mode `0600`.
 
+## Terminal Output
+
+Normal terminal output is intentionally light and grouped by purpose:
+
+- `Run context`: parsed command values, inferred defaults, target DC, LDAP method, auth mode, and base DN;
+- `Progress`: connection and LDAP workflow events;
+- `Findings`: results that matter to the operator, including OU rights, dMSA verification, and cleanup status;
+- `Next steps`: concrete follow-up commands when the run succeeded or can continue.
+
+Warnings and errors use severity markers and color when stderr is a TTY. The same data remains available in JSON reports without terminal formatting.
+
 ## Troubleshooting
 
 LDAP action failures try to preserve the local decision point in structured output. Look at `result.error_code`, `result.error`, and, when present, `result.ldap_result` or `result.verification_errors`.
@@ -76,11 +86,11 @@ LDAP action failures try to preserve the local decision point in structured outp
 Common local validation failures are intentionally caught before LDAP execution:
 
 - `--dmsa-name` must be a DNS-safe label such as `redpen` or `dMSA-REDPEN01`;
-- `--dns-hostname` must be a fully qualified DNS hostname such as `redpen.eighteen.htb`;
+- `--dns-hostname` must be a fully qualified DNS hostname such as `redpen.redteamnotes.com`;
 - `--scope-domain` and `--scope-base-dn` must agree for execution workflows.
 
 ## Compatibility
 
-`--lean` is the preferred short preset for lighter local output and search defaults. `--low-noise` remains as a compatibility alias.
+`--lean` is the short preset for lighter local output and assessment defaults.
 
 The old `modify` workflow has been removed. Use `delete`, `add`, and `verify`; old `modify` commands return a migration error instead of reaching LDAP.

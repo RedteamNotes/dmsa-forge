@@ -1,14 +1,14 @@
 # dMSA Forge
 
-[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.8)
+[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.9)
 [![Tests](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml/badge.svg)](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Impacket%20Apache--1.1-blue)](https://github.com/RedteamNotes/dmsa-forge/blob/main/LICENSE)
 
 **Langue :** [English](../README.md) | [简体中文](README.zh-CN.md) | Français
 
-Version actuelle : `v0.5.8`
+Version actuelle : `v0.5.9`
 
-Forge [dMSA](https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview) pour les workflows LDAP [BadSuccessor](https://www.akamai.com/blog/security-research/abusing-dmsa-for-privilege-escalation-in-active-directory) autorisés : add, verify, delete et search.
+Forge [dMSA](https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview) pour les workflows LDAP [BadSuccessor](https://www.akamai.com/blog/security-research/abusing-dmsa-for-privilege-escalation-in-active-directory) autorisés : assess, add, verify et delete.
 
 Conçu autour de LDAP 389 signé, de la création atomique de dMSA, de la vérification après ajout, d'une aide opérateur concise, des profils projet et du reporting structuré.
 
@@ -69,7 +69,6 @@ Entrées d'aide utiles :
 
 ```bash
 dmsa-forge add -h
-dmsa-forge add --help-advanced
 dmsa-forge update --dry-run
 ```
 
@@ -81,48 +80,56 @@ Les exemples ci-dessous utilisent des commandes nommées par tâche et les optio
 Prévisualisez un add avec le profil safe. Les commandes de ce README sont volontairement présentées sur une seule ligne, prêtes à copier ; si vous utilisez un wrapper local comme `proxychains -f chain1080.conf -q`, placez-le avant `dmsa-forge`.
 
 ```bash
-dmsa-forge plan add eighteen.htb/adam.scott:'PASSWORD' --profile safe --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account 'ACCOUNT_TO_SUCCEED' --principals-allowed '<SID_OR_NAME>'
+dmsa-forge plan add redteamnotes.com/operator:'PASSWORD' --profile safe --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account 'Administrator' --principals-allowed '<SID_OR_NAME>'
 ```
 
 Par défaut, `DOMAIN/user` infère `--scope-domain`, `--scope-base-dn` et `--base-dn` ; LDAP/389 est la méthode et le port par défaut ; `--dns-hostname` est inféré depuis `--dmsa-name` et le domaine du compte. Pour `add`, choisissez explicitement le compte à succéder avec `--target-account` et le lecteur du mot de passe géré avec `--principals-allowed`.
+
+Les modèles utilisent `redpen` comme nom dMSA suggéré et `Administrator` comme exemple courant de predecessor account. Remplacez l'une ou l'autre valeur lorsque la chaîne autorisée cible un autre objet.
 
 ## Flux Opérateur
 
 Ces modèles gardent chaque commande sur une seule ligne pour le copier-coller, l'historique du terminal et les runbooks reproductibles. Remplacez les placeholders avant utilisation.
 
+Évaluer les droits OU :
+
+```bash
+dmsa-forge assess redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com
+```
+
 Vérification avant ajout :
 
 ```bash
-dmsa-forge verify eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen
+dmsa-forge verify redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen
 ```
 
 Plan d'ajout :
 
 ```bash
-dmsa-forge plan add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account 'ACCOUNT_TO_SUCCEED' --principals-allowed '<SID_OR_NAME>'
+dmsa-forge plan add redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account 'Administrator' --principals-allowed '<SID_OR_NAME>'
 ```
 
 Ajouter :
 
 ```bash
-dmsa-forge add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account 'ACCOUNT_TO_SUCCEED' --principals-allowed '<SID_OR_NAME>'
+dmsa-forge add redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account 'Administrator' --principals-allowed '<SID_OR_NAME>'
 ```
 
 Vérification après ajout :
 
 ```bash
-dmsa-forge verify eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen
+dmsa-forge verify redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen
 ```
 
 Supprimer après usage :
 
 ```bash
-dmsa-forge delete eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --yes
+dmsa-forge delete redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --yes
 ```
 
 Après un `add` ou `verify` validé, `Next steps` affiche directement les commandes Kerberos externes concrètes. Le flux généré commence par `Rubeus hash`, utilise ensuite la valeur AES256 affichée pour `asktgt`, puis lance la requête dMSA `asktgs`.
 
-La résolution du compte cible repose sur une recherche LDAP. `--target-account` écrit `msDS-ManagedAccountPrecededByLink`; `--principals-allowed` écrit le SID utilisé dans `msDS-GroupMSAMembership`. Les next steps générés par search peuvent remplir le SID principal découvert, mais le compte cible reste un choix explicite de l'opérateur.
+La résolution du compte cible repose sur une recherche LDAP. `--target-account` écrit `msDS-ManagedAccountPrecededByLink`; `--principals-allowed` écrit le SID utilisé dans `msDS-GroupMSAMembership`. Les next steps générés par assess peuvent remplir le SID principal découvert, mais le compte cible reste un choix explicite de l'opérateur.
 
 Contrôles de sécurité :
 
@@ -132,7 +139,7 @@ Contrôles de sécurité :
 - Quand `--method` et `--port` sont omis, LDAP/389 est tenté en premier. Si la connexion échoue, dMSA Forge peut essayer LDAPS/636 et consigne les candidats tentés dans la sortie terminale et les rapports JSON/texte. Un `--port 636` seul infère LDAPS ; définir à la fois `--method` et `--port` exige une paire exacte.
 - `--dns-hostname` vaut par défaut `<dmsa-name>.<account-domain>` lorsque `--dmsa-name` est défini.
 - Utilisez `--dc-host` pour un DC précis, et `--dc-ip` uniquement lorsque DNS ou le routage nécessite une adresse IP explicite. La résolution automatique de l'IP du DC ne sonde jamais le réseau ; les résultats multicast, loopback, link-local, unspecified, broadcast et reserved sont rejetés afin qu'un placeholder DNS de proxy comme `224.0.0.1` ne devienne pas une valeur Kerberos `/dc:`.
-- Pour `search`, `--target-ou` réduit la base de recherche OU. La vérification préalable du DC est best-effort ; en cas d'échec, la recherche OU continue et consigne un warning.
+- Pour `assess`, `--target-ou` réduit la base d'évaluation OU. La vérification préalable du DC est best-effort ; en cas d'échec, l'évaluation OU continue et consigne un warning.
 - La résolution du compte cible et de `--principals-allowed` préfère les correspondances exactes `sAMAccountName`, UPN ou CN. Les résultats LDAP ambigus échouent proprement avec une indication de fournir un DN complet ou un SID.
 - `delete` exige `--yes`. L'ancien workflow `modify` a été supprimé ; utilisez `delete`, `add` et `verify`.
 - La sortie locale est masquée par défaut. `--no-redact` exige `--debug`.
@@ -140,18 +147,20 @@ Contrôles de sécurité :
 - Utilisez `--output-only` pour une exécution ultra-discrète. Cela active automatiquement `--quiet` et `--no-banner`, et bascule sur `--json` par défaut si `--output` n'est pas fourni. Avec `--output`, le fichier de sortie reste au format JSON.
 - Utilisez `--quiet` pour réduire la verbosité au niveau warning/error.
 - Utilisez `--no-banner` pour intégrer l'outil dans des scripts locaux avec une sortie plus compacte.
-- Utilisez `--lean` pour une sortie locale plus légère et des recherches plus sobres (équivalent à `--minimal`, `--quiet`, `--skip-dc-prereq`, `--no-banner`). `--low-noise` reste disponible comme alias de compatibilité.
+- Utilisez `--lean` pour une sortie locale plus légère et des évaluations plus sobres (équivalent à `--minimal`, `--quiet`, `--skip-dc-prereq`, `--no-banner`).
 
 Les rapports JSON structures incluent `schema_version` afin que l'automatisation puisse figer le comportement de parsing.
 
-Modes de recherche :
+La sortie terminale humaine est groupee en `Run context`, `Progress`, `Findings` et `Next steps`. Les warnings et erreurs conservent leurs marqueurs de severite `[!]` / `[-]` et n'utilisent la couleur que lorsque le terminal la prend en charge ; les modes JSON, quiet et output-only restent propres pour les machines.
 
-- `search` analyse par défaut les descripteurs de sécurité des OU.
-- Les résultats listent les principals disposant de droits OU pertinents pour BadSuccessor, c'est-à-dire capables de créer des objets dMSA ou de contrôler les OU listées. L'outil compare aussi ces SID avec l'`objectSid` et les `tokenGroups` du compte lié et indique si chaque ligne s'applique au bind courant; si `tokenGroups` n'est pas disponible, les droits via groupe sont marqués `unknown`.
-- Utilisez `--summary` pour une liste OU légère sans analyse de descripteur de sécurité. `--include-security-descriptor` et `--include-sd` restent acceptés comme alias explicites du mode d'analyse par défaut.
+Modes d'évaluation :
+
+- `assess` analyse par défaut les descripteurs de sécurité des OU.
+- Les résultats d'évaluation listent les principals disposant de droits OU pertinents pour BadSuccessor, c'est-à-dire capables de créer des objets dMSA ou de contrôler les OU listées. L'outil compare aussi ces SID avec l'`objectSid` et les `tokenGroups` du compte lié et indique si chaque ligne s'applique au bind courant; si `tokenGroups` n'est pas disponible, les droits via groupe sont marqués `unknown`.
+- Utilisez `--summary` pour une liste OU légère sans analyse de descripteur de sécurité. `--include-security-descriptor` sélectionne explicitement le mode d'analyse par défaut.
 - Ajoutez `--resolve-names` pour résoudre les SID correspondants en noms.
 - Utilisez `--minimal` pour éviter l'analyse large, la résolution de noms et les commandes Kerberos supplémentaires.
-- Ajoutez `--skip-dc-prereq` pour sauter la vérification prérequise du DC dans `search` et réduire le bruit LDAP.
+- Ajoutez `--skip-dc-prereq` pour sauter la vérification prérequise du DC dans `assess` et réduire le bruit LDAP.
 
 Les détails avancés et de compatibilité sont dans [advanced.fr.md](advanced.fr.md).
 

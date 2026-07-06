@@ -8,11 +8,10 @@
 
 ```bash
 dmsa-forge add -h
-dmsa-forge search -h
-dmsa-forge add --help-advanced
+dmsa-forge assess -h
 ```
 
-默认动作帮助刻意保持简洁。对动作使用 `--help-advanced` 可以查看认证参数、兼容别名、验证重试控制和高级工作流参数。
+动作帮助刻意保持简洁。认证、报告、重试和兼容性细节放在本文档中，而不继续扩展终端帮助。
 
 ## 自动推断默认值
 
@@ -29,7 +28,7 @@ dMSA Forge 保持运行状态都体现在命令行中，不加载项目配置文
 - 设置 `--dmsa-name` 后，`--dns-hostname` 默认是 `<dmsa-name>.<account-domain>`。
 - 对真实 `add` 执行来说，`--principals-allowed` 必填，它决定写入 `msDS-GroupMSAMembership` 的 SID。
 - 自动 DC IP 解析只使用本地 DNS，不会 ping 或探测；特殊用途地址会在进入 Kerberos 命令建议前被拒绝。
-- 对 `search` 来说，`--target-ou` 用于缩小 OU 搜索基准，DC 前置检查是 best-effort。
+- 对 `assess` 来说，`--target-ou` 用于缩小 OU 评估基准，DC 前置检查是 best-effort。
 
 显式参数始终覆盖推断值。需要指定 DC 主机名时使用 `--dc-host`；只有 DNS 或路由需要 IP 覆盖时才使用 `--dc-ip`。推断决策和连接候选都会写入终端输出与结构化报告。
 
@@ -44,7 +43,7 @@ dMSA Forge 保持运行状态都体现在命令行中，不加载项目配置文
 `dmsa-forge plan ACTION ...` 等价于 `dmsa-forge ACTION ... --dry-run`。
 
 ```bash
-dmsa-forge plan add eighteen.htb/user --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account ACCOUNT_TO_SUCCEED --principals-allowed SID_OR_NAME
+dmsa-forge plan add redteamnotes.com/operator --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account Administrator --principals-allowed SID_OR_NAME
 ```
 
 它使用和普通 dry-run 相同的校验与报告格式。
@@ -69,6 +68,17 @@ dmsa-forge plan add eighteen.htb/user --target-ou 'OU=Staff,DC=eighteen,DC=htb' 
 
 使用 `--output-only --output FILE` 可以仅写入 JSON 文件，文件权限为 `0600`。
 
+## 终端输出
+
+普通终端输出保持轻量，并按信息目的分块：
+
+- `Run context`：解析后的命令值、推断默认值、目标 DC、LDAP 方法、认证方式和 base DN；
+- `Progress`：连接和 LDAP workflow 事件；
+- `Findings`：操作者最需要看的结果，包括 OU 权限、dMSA 验证和清理状态；
+- `Next steps`：执行成功或可以继续时的具体后续命令。
+
+Warning 和 error 会使用严重级别标记，并且只在 stderr 是 TTY 时使用颜色。同一份数据会保留在 JSON 报告中，不带终端格式。
+
 ## 排查
 
 LDAP 动作失败时，结构化输出会尽量保留本地决策点。优先查看 `result.error_code`、`result.error`，以及存在时的 `result.ldap_result` 或 `result.verification_errors`。
@@ -76,11 +86,11 @@ LDAP 动作失败时，结构化输出会尽量保留本地决策点。优先查
 常见本地校验会在 LDAP 执行前拦截：
 
 - `--dmsa-name` 必须是 DNS-safe label，例如 `redpen` 或 `dMSA-REDPEN01`；
-- `--dns-hostname` 必须是完整 DNS hostname，例如 `redpen.eighteen.htb`；
+- `--dns-hostname` 必须是完整 DNS hostname，例如 `redpen.redteamnotes.com`；
 - 执行类 workflow 中，`--scope-domain` 和 `--scope-base-dn` 必须一致。
 
 ## 兼容性
 
-`--lean` 是更推荐的短预设，用于更轻量的本地输出和搜索默认值。`--low-noise` 继续作为兼容别名保留。
+`--lean` 是用于更轻量本地输出和评估默认值的短预设。
 
 旧的 `modify` workflow 已移除。请使用 `delete`、`add` 和 `verify`；旧 `modify` 命令会返回迁移错误，不会进入 LDAP。

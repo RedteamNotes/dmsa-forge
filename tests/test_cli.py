@@ -70,7 +70,7 @@ def execution_options(**overrides):
     values = dict(cli.CLI_DEFAULTS)
     values.update({
         'account': 'test.local/admin:pw',
-        'action': 'search',
+        'action': 'assess',
         'base_dn': 'DC=test,DC=local',
         'scope_domain': 'test.local',
         'scope_base_dn': 'DC=test,DC=local',
@@ -201,7 +201,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn('Unknown plan action', result.stderr)
 
-    def test_action_first_and_legacy_action_cannot_be_mixed(self):
+    def test_action_flag_workflow_is_removed(self):
         result = run_cli(
             'add',
             'test.local/admin:pw',
@@ -214,13 +214,22 @@ class CLIBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 2)
-        self.assertIn('Do not combine action shortcuts with --action', result.stderr)
+        self.assertIn('--action was removed', result.stderr)
+        self.assertIn('dmsa-forge add', result.stderr)
+
+    def test_account_first_workflow_is_removed(self):
+        result = run_cli('test.local/admin:pw')
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('Unknown action "test.local/admin:pw"', result.stderr)
+        self.assertIn('dmsa-forge -h', result.stderr)
 
     def test_global_help_is_grouped(self):
         result = run_cli('-h', env_overrides={'SHELL': '/bin/zsh'})
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertIn('usage: dmsa-forge', result.stdout)
+        self.assertIn('assess', result.stdout)
         self.assertIn('add', result.stdout)
         self.assertIn('update', result.stdout)
         self.assertNotIn('Diagnostics:', result.stdout)
@@ -244,6 +253,7 @@ class CLIBehaviorTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertIn('usage: dmsa-forge', result.stdout)
+        self.assertIn('assess', result.stdout)
         self.assertNotIn('Diagnostics:', result.stdout)
         self.assertNotIn('local readiness:', result.stdout)
         self.assertNotIn('dmsa-forge doctor', result.stdout)
@@ -311,21 +321,18 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertIn('usage: dmsa-forge add', result.stdout)
         self.assertIn('--target-account', result.stdout)
         self.assertIn('local controls:', result.stdout)
-        self.assertIn('--help-advanced', result.stdout)
+        self.assertNotIn('--help-advanced', result.stdout)
         self.assertNotIn('\\\n', result.stdout)
         self.assertNotIn('--hashes', result.stdout)
         self.assertNotIn('--allow-admin-fallback', result.stdout)
         self.assertNotIn('--next-step-prefix', result.stdout)
 
-    def test_action_advanced_help_is_available(self):
-        result = run_cli('add', '--help-advanced')
+    def test_action_advanced_help_is_removed(self):
+        result = run_cli('add', 'test.local/admin:pw', '--help-advanced')
 
-        self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertIn('advanced options for add', result.stdout)
-        self.assertIn('--hashes', result.stdout)
-        self.assertIn('--allow-admin-fallback', result.stdout)
-        self.assertIn('--next-step-prefix', result.stdout)
-        self.assertNotIn('DMSA_FORGE_NEXT_STEP_PREFIX', result.stdout)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('unrecognized arguments: --help-advanced', result.stderr)
+        self.assertNotIn('advanced options for add', result.stdout)
 
     def test_plan_command_maps_to_dry_run(self):
         result = run_cli('plan', 'add', *BASE_ARGS, '--output-only')
@@ -359,6 +366,8 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertNotIn('--config', zsh.stdout)
         self.assertNotIn('config', bash.stdout)
         self.assertNotIn('--config', bash.stdout)
+        self.assertNotIn('--include-sd', zsh.stdout)
+        self.assertNotIn('--include-sd', bash.stdout)
 
     def test_package_installs_collision_safe_alias(self):
         with open(os.path.join(REPO_ROOT, 'pyproject.toml'), 'r', encoding='utf-8') as handle:
@@ -383,25 +392,32 @@ class CLIBehaviorTests(unittest.TestCase):
         guidance = run_cli('guidance', 'test.local/admin:pw', '--dmsa-name', 'redpen')
         modify = run_cli('modify', *BASE_ARGS, '--dmsa-name', 'redpen', '--yes')
         completion = run_cli('completion', 'zsh', env_overrides={'SHELL': '/bin/zsh'})
+        search = run_cli('search', 'test.local/admin:pw')
         actions = run_cli('actions')
         examples = run_cli('examples')
         help_command = run_cli('help', 'add')
         legacy_modify = run_cli('test.local/admin:pw', '--action', 'modify')
+        legacy_search = run_cli('test.local/admin:pw', '--action', 'search')
 
         self.assertEqual(guidance.returncode, 2)
         self.assertEqual(modify.returncode, 2)
         self.assertEqual(completion.returncode, 2)
+        self.assertEqual(search.returncode, 2)
         self.assertEqual(actions.returncode, 2)
         self.assertEqual(examples.returncode, 2)
         self.assertEqual(help_command.returncode, 2)
         self.assertEqual(legacy_modify.returncode, 2)
+        self.assertEqual(legacy_search.returncode, 2)
         self.assertIn('successful add/verify output includes Kerberos commands', guidance.stderr)
         self.assertIn('use delete/add/verify', modify.stderr)
         self.assertIn('--completion-script zsh', completion.stderr)
+        self.assertIn('"search" was removed', search.stderr)
+        self.assertIn('dmsa-forge assess', search.stderr)
         self.assertIn('dmsa-forge ACTION -h', actions.stderr)
         self.assertIn('dmsa-forge ACTION -h', examples.stderr)
         self.assertIn('dmsa-forge ACTION -h', help_command.stderr)
-        self.assertIn('use delete/add/verify', legacy_modify.stderr)
+        self.assertIn('--action was removed', legacy_modify.stderr)
+        self.assertIn('--action was removed', legacy_search.stderr)
 
     def test_update_dry_run_uses_current_python_environment(self):
         source = '%s@v0.5.3' % cli.DEFAULT_UPDATE_SOURCE
@@ -591,6 +607,8 @@ class CLIBehaviorTests(unittest.TestCase):
         output = result.stdout + result.stderr
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('Run context', output)
+        self.assertIn('Planned values', output)
         self.assertIn('Account:', output)
         self.assertIn('test.local/admin:pw', output)
         self.assertIn('Method:                  LDAP (inferred)', output)
@@ -671,9 +689,9 @@ class CLIBehaviorTests(unittest.TestCase):
         output = result.stdout + result.stderr
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertIn('Next steps:', output)
+        self.assertIn('Next steps', output)
         self.assertIn(
-            "proxychains -f chain1080.conf -q dmsa-forge add eighteen.htb/adam.scott:iloveyou1 --dc-host dc01.eighteen.htb --target-ou OU=Staff,DC=eighteen,DC=htb --dmsa-name redpen --target-account ACCOUNT_TO_SUCCEED --principals-allowed S-1-5-21-1152179935-589108180-1989892463-1604",
+            "proxychains -f chain1080.conf -q dmsa-forge add eighteen.htb/adam.scott:iloveyou1 --dc-host dc01.eighteen.htb --target-ou OU=Staff,DC=eighteen,DC=htb --dmsa-name redpen --target-account Administrator --principals-allowed S-1-5-21-1152179935-589108180-1989892463-1604",
             output,
         )
         self.assertNotIn('<TARGET_ACCOUNT_DN_OR_SAM>', output)
@@ -814,7 +832,7 @@ class CLIBehaviorTests(unittest.TestCase):
 
             cli.resolve_ipv4_address = fake_resolve
             options = execution_options(
-                action='search',
+                action='assess',
                 dc_host='dc01.eighteen.htb',
                 dc_host_supplied=True,
                 dc_ip=None,
@@ -845,7 +863,7 @@ class CLIBehaviorTests(unittest.TestCase):
         ))
 
     def test_failed_execution_has_no_next_steps(self):
-        options = execution_options(action='search')
+        options = execution_options(action='assess')
         report = {'result': {'error_code': 'ou_search_failed'}}
 
         cli.attach_next_steps(report, options, mode='execute', success=False)
@@ -853,7 +871,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(report['result']['next_steps'], [])
 
     def test_empty_search_result_has_no_next_steps(self):
-        options = execution_options(action='search')
+        options = execution_options(action='assess')
         report = {'result': {'mode': 'summary', 'ou_count': 0}}
 
         cli.attach_next_steps(report, options, mode='execute', success=True)
@@ -861,7 +879,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(report['result']['next_steps'], [])
 
     def test_empty_security_descriptor_analysis_has_no_next_steps(self):
-        options = execution_options(action='search', include_sd=True, resolve_names=True)
+        options = execution_options(action='assess', include_sd=True, resolve_names=True)
         report = {'result': {'mode': 'security_descriptor_analysis', 'ou_count': 1, 'identity_count': 0}}
 
         cli.attach_next_steps(report, options, mode='execute', success=True)
@@ -870,7 +888,7 @@ class CLIBehaviorTests(unittest.TestCase):
 
     def test_search_next_steps_start_with_add_plan_for_discovered_candidate(self):
         options = execution_options(
-            action='search',
+            action='assess',
             account='test.local/admin:pw',
             dc_host='dc01.test.local',
             dc_host_supplied=True,
@@ -900,14 +918,14 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertIn('--target-ou OU=Staff,DC=test,DC=local', command)
         self.assertIn('--dmsa-name redpen', command)
         self.assertIn('--principals-allowed S-1-5-21-1-2-3-1604', command)
-        self.assertIn('--target-account ACCOUNT_TO_SUCCEED', command)
+        self.assertIn('--target-account Administrator', command)
         self.assertNotIn('<TARGET_ACCOUNT_DN_OR_SAM>', command)
         self.assertNotIn('hint', report['result']['next_steps'][0])
         self.assertNotIn('_next_step_candidates', report['result'])
 
     def test_search_next_steps_keep_proxychains_for_add_plan(self):
         options = execution_options(
-            action='search',
+            action='assess',
             account='test.local/admin:pw',
             include_sd=True,
             next_step_prefix='proxychains -f chain1080.conf -q',
@@ -934,7 +952,7 @@ class CLIBehaviorTests(unittest.TestCase):
 
     def test_rejected_dc_ip_next_step_reruns_current_action_first(self):
         options = execution_options(
-            action='search',
+            action='assess',
             account='eighteen.htb/adam.scott:iloveyou1',
             dc_host='dc01.eighteen.htb',
             dc_host_supplied=True,
@@ -968,7 +986,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(len(steps), 1)
         self.assertEqual(steps[0]['label'], 'Rerun with a real DC IPv4')
         self.assertIn(
-            'proxychains -f chain1080.conf -q dmsa-forge search eighteen.htb/adam.scott:iloveyou1',
+            'proxychains -f chain1080.conf -q dmsa-forge assess eighteen.htb/adam.scott:iloveyou1',
             steps[0]['command'],
         )
         self.assertIn('--dc-host dc01.eighteen.htb', steps[0]['command'])
@@ -1095,7 +1113,7 @@ class CLIBehaviorTests(unittest.TestCase):
 
     def test_scope_base_dn_infers_base_dn_for_short_account_domain(self):
         result = run_cli(
-            'search',
+            'assess',
             'TEST/admin:pw',
             '--scope-base-dn',
             'DC=test,DC=local',
@@ -1526,8 +1544,8 @@ class CLIBehaviorTests(unittest.TestCase):
             self.assertEqual(os.stat(output_path).st_mode & 0o777, 0o600)
 
     def test_kerberos_guidance_is_add_verify_option_not_action(self):
-        add_help = run_cli('add', '--help-advanced')
-        verify_help = run_cli('verify', '--help-advanced')
+        add_help = run_cli('add', '-h')
+        verify_help = run_cli('verify', '-h')
         verify_dry_run = run_cli(
             'verify',
             'test.local/admin:pw',
@@ -1556,7 +1574,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(direct.returncode, 2)
         self.assertEqual(legacy.returncode, 2)
         self.assertIn('use delete/add/verify', direct.stderr)
-        self.assertIn('use delete/add/verify', legacy.stderr)
+        self.assertIn('--action was removed', legacy.stderr)
         self.assertNotIn('--allow-deprecated-modify', direct.stderr)
 
     def test_minimal_add_dry_run_does_not_trigger_search_only_prereq_error(self):
@@ -1569,7 +1587,7 @@ class CLIBehaviorTests(unittest.TestCase):
 
     def test_minimal_search_plan_omits_skipped_dc_prereq_query(self):
         result = run_cli(
-            'search',
+            'assess',
             'test.local/admin:pw',
             '--scope-domain',
             'test.local',
@@ -1588,7 +1606,7 @@ class CLIBehaviorTests(unittest.TestCase):
 
     def test_search_accepts_target_ou_as_search_base(self):
         result = run_cli(
-            'search',
+            'assess',
             'test.local/admin:pw',
             '--scope-domain',
             'test.local',
@@ -1609,7 +1627,7 @@ class CLIBehaviorTests(unittest.TestCase):
 
     def test_search_defaults_to_security_descriptor_analysis(self):
         result = run_cli(
-            'search',
+            'assess',
             'test.local/admin:pw',
             '--scope-domain',
             'test.local',
@@ -1627,9 +1645,29 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(ou_searches[0]['controls'], ['sdflags=0x5'])
         self.assertIn('nTSecurityDescriptor', ou_searches[0]['attributes'])
 
+    def test_assess_defaults_to_security_descriptor_analysis(self):
+        result = run_cli(
+            'assess',
+            'test.local/admin:pw',
+            '--scope-domain',
+            'test.local',
+            '--dry-run',
+            '--output-only',
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload['action'], 'assess')
+        self.assertTrue(payload['controls']['include_sd'])
+        ou_searches = [
+            op for op in payload['ldap_operations']
+            if op.get('filter') == '(objectClass=organizationalUnit)'
+        ]
+        self.assertEqual(ou_searches[0]['controls'], ['sdflags=0x5'])
+
     def test_search_summary_disables_security_descriptor_analysis(self):
         result = run_cli(
-            'search',
+            'assess',
             'test.local/admin:pw',
             '--scope-domain',
             'test.local',
@@ -1648,9 +1686,9 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(ou_searches[0].get('controls'), [])
         self.assertNotIn('nTSecurityDescriptor', ou_searches[0]['attributes'])
 
-    def test_search_include_security_descriptor_aliases_are_equivalent(self):
+    def test_include_security_descriptor_short_alias_is_removed(self):
         long_result = run_cli(
-            'search',
+            'assess',
             'test.local/admin:pw',
             '--scope-domain',
             'test.local',
@@ -1660,7 +1698,7 @@ class CLIBehaviorTests(unittest.TestCase):
             '--output-only',
         )
         short_result = run_cli(
-            'search',
+            'assess',
             'test.local/admin:pw',
             '--scope-domain',
             'test.local',
@@ -1671,12 +1709,10 @@ class CLIBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(long_result.returncode, 0, msg=long_result.stderr)
-        self.assertEqual(short_result.returncode, 0, msg=short_result.stderr)
+        self.assertEqual(short_result.returncode, 2)
         long_payload = json.loads(long_result.stdout)
-        short_payload = json.loads(short_result.stdout)
         self.assertTrue(long_payload['controls']['include_sd'])
-        self.assertTrue(short_payload['controls']['include_sd'])
-        self.assertEqual(long_payload['ldap_operations'], short_payload['ldap_operations'])
+        self.assertIn('unrecognized arguments: --include-sd', short_result.stderr)
 
     def test_search_continues_when_dc_prereq_check_fails(self):
         class SearchConnection:
@@ -2168,7 +2204,7 @@ class CLIBehaviorTests(unittest.TestCase):
 
         def run_with_object_type(object_type):
             options = execution_options(
-                action='search',
+                action='assess',
                 include_sd=True,
                 search_summary=False,
                 skip_dc_prereq=True,
@@ -2349,7 +2385,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(forge._options.target_ou, 'OU=Staff,DC=test,DC=local')
         self.assertEqual(forge.report['result']['ou_count'], 1)
         self.assertEqual(forge.report['result']['search_base'], 'OU=Staff,DC=test,DC=local')
-        self.assertIn('Broad OU search failed', forge.report['result']['search_fallback'])
+        self.assertIn('Broad OU assessment failed', forge.report['result']['search_fallback'])
         self.assertTrue(any(event['kind'] == 'target_ou' and event['status'] == 'fallback' for event in forge.report['inference']))
 
     def test_ldap_compat_does_not_append_port_to_impacket_url(self):
