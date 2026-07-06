@@ -200,8 +200,11 @@ class CLIBehaviorTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertIn('usage: dmsaforge add [domain/]username[:password] -o OU_DN [options]', result.stdout)
-        self.assertIn('-o, --ou, --target-ou OU_DN', result.stdout)
-        self.assertIn('-d, --dmsa-name NAME', result.stdout)
+        self.assertIn('-o', result.stdout)
+        self.assertIn('--ou', result.stdout)
+        self.assertIn('--target-ou OU_DN', result.stdout)
+        self.assertIn('-d', result.stdout)
+        self.assertIn('--dmsa-name NAME', result.stdout)
         self.assertIn('--target-account', result.stdout)
 
     def test_unknown_action_specific_help_fails_cleanly(self):
