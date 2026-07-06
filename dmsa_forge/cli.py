@@ -4462,7 +4462,6 @@ def build_subcommand_parser():
     update_parser.add_argument('--source', dest='update_source', default=DEFAULT_UPDATE_SOURCE, metavar='PIP_SPEC', help='pip install source. Default: %(default)s')
     update_parser.add_argument('--force', action='store_true', help='Run pip even when the version check matches or cannot be completed.')
     update_parser.add_argument('--quiet', action='store_true', help='Pass -q to pip and reduce local output.')
-    update_parser.add_argument('--no-banner', action='store_true', help='Suppress startup banner and attribution text.')
     return parser
 
 
@@ -4909,38 +4908,54 @@ def completion_script(shell):
         '-d', '--dmsa-name', '-o', '--ou', '--target-ou', '-t', '--target-account',
         '--summary', '--include-security-descriptor', '--resolve-names',
     ])
+    update_options = '--help -h --dry-run --source --force --quiet'
     if shell == 'bash':
         return '''# dmsaforge bash completion
 _dmsaforge_completion() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
+  local command="${COMP_WORDS[1]}"
+  local update_opts="%s"
   if [[ ${COMP_CWORD} -eq 1 ]]; then
     COMPREPLY=( $(compgen -W "%s" -- "$cur") )
     return 0
   fi
   case "$cur" in
-    --*) COMPREPLY=( $(compgen -W "%s" -- "$cur") ); return 0 ;;
+    --*)
+      if [[ "$command" == "update" ]]; then
+        COMPREPLY=( $(compgen -W "$update_opts" -- "$cur") )
+      else
+        COMPREPLY=( $(compgen -W "%s" -- "$cur") )
+      fi
+      return 0
+      ;;
   esac
 }
 complete -F _dmsaforge_completion dmsaforge
-''' % (commands, common_options)
+''' % (update_options, commands, common_options)
     return '''# dmsaforge zsh completion
 # No-persistence use for the current shell:
 #   eval "$(dmsaforge --completion-script zsh)"
 # For persistent use, save this output as a file on your fpath.
 _dmsaforge() {
-  local -a commands common_opts
+  local -a commands common_opts update_opts
   commands=(%s)
   common_opts=(%s)
+  update_opts=(%s)
   if (( CURRENT == 2 )); then
     _describe 'command' commands
     return
   fi
-  _describe 'option' common_opts
+  if [[ "${words[2]}" == "update" ]]; then
+    _describe 'option' update_opts
+  else
+    _describe 'option' common_opts
+  fi
 }
 compdef _dmsaforge dmsaforge
 ''' % (
         ' '.join('"%s:%s"' % (command, ACTION_SUMMARY.get(command, command)) for command in ACTION_CHOICES) + ' "plan:dry-run shorthand" "update:update current environment"',
         ' '.join('"%s"' % option for option in common_options.split()),
+        ' '.join('"%s"' % option for option in update_options.split()),
     )
 
 

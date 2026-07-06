@@ -531,6 +531,8 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertIn('complete -F _dmsaforge_completion dmsaforge', bash.stdout)
         self.assertIn('update', zsh.stdout)
         self.assertIn('update', bash.stdout)
+        self.assertIn('update_opts=', zsh.stdout)
+        self.assertIn('update_opts=', bash.stdout)
         self.assertNotIn('actions', zsh.stdout)
         self.assertNotIn('examples', zsh.stdout)
         self.assertNotIn('actions', bash.stdout)
@@ -597,7 +599,7 @@ class CLIBehaviorTests(unittest.TestCase):
 
     def test_update_dry_run_uses_current_python_environment(self):
         source = '%s@v0.5.3' % cli.DEFAULT_UPDATE_SOURCE
-        result = run_cli('update', '--dry-run', '--no-banner', '--source', source)
+        result = run_cli('update', '--dry-run', '--source', source)
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertIn('Current version:', result.stdout)
@@ -610,7 +612,7 @@ class CLIBehaviorTests(unittest.TestCase):
 
     def test_update_skips_when_target_version_matches(self):
         source = '%s@%s' % (cli.DEFAULT_UPDATE_SOURCE, cli.TOOL_VERSION)
-        result = run_cli('update', '--dry-run', '--no-banner', '--source', source)
+        result = run_cli('update', '--dry-run', '--source', source)
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertIn('Current version:', result.stdout)
@@ -618,7 +620,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertNotIn('Update command:', result.stdout)
 
     def test_update_unknown_source_requires_force(self):
-        result = run_cli('update', '--dry-run', '--no-banner', '--source', 'git+https://example.test/project.git')
+        result = run_cli('update', '--dry-run', '--source', 'git+https://example.test/project.git')
 
         self.assertEqual(result.returncode, 1)
         self.assertIn('Could not determine update target version', result.stderr)
@@ -627,11 +629,24 @@ class CLIBehaviorTests(unittest.TestCase):
 
     def test_update_force_runs_without_version_check(self):
         source = 'git+https://example.test/project.git'
-        result = run_cli('update', '--dry-run', '--no-banner', '--force', '--source', source)
+        result = run_cli('update', '--dry-run', '--force', '--source', source)
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertIn('Update command:', result.stdout)
         self.assertIn(source, result.stdout)
+
+    def test_update_help_omits_banner_option(self):
+        result = run_cli('update', '--help')
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('usage: dmsaforge update', result.stdout)
+        self.assertNotIn('--no-banner', result.stdout)
+
+    def test_update_rejects_no_banner(self):
+        result = run_cli('update', '--no-banner')
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('unrecognized arguments: --no-banner', result.stderr)
 
     def test_update_restores_working_directory(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -652,7 +667,6 @@ class CLIBehaviorTests(unittest.TestCase):
                     force=True,
                     dry_run=False,
                     quiet=True,
-                    no_banner=True,
                     update_source='git+https://example.test/project.git',
                 )
                 result = cli.run_update(options)
