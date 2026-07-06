@@ -533,6 +533,14 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertIn('update', bash.stdout)
         self.assertIn('update_opts=', zsh.stdout)
         self.assertIn('update_opts=', bash.stdout)
+        self.assertIn('assess_opts=', zsh.stdout)
+        self.assertIn('add_opts=', zsh.stdout)
+        self.assertIn('verify_opts=', zsh.stdout)
+        self.assertIn('delete_opts=', zsh.stdout)
+        self.assertIn('local assess_opts=', bash.stdout)
+        self.assertIn('local add_opts=', bash.stdout)
+        self.assertIn('local verify_opts=', bash.stdout)
+        self.assertIn('local delete_opts=', bash.stdout)
         self.assertNotIn('actions', zsh.stdout)
         self.assertNotIn('examples', zsh.stdout)
         self.assertNotIn('actions', bash.stdout)
@@ -546,6 +554,31 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertNotIn('--config', bash.stdout)
         self.assertNotIn('--include-sd', zsh.stdout)
         self.assertNotIn('--include-sd', bash.stdout)
+
+    def test_completion_options_are_command_specific(self):
+        zsh = run_cli('--completion-script', 'zsh')
+        bash = run_cli('--completion-script', 'bash')
+
+        self.assertEqual(zsh.returncode, 0, msg=zsh.stderr)
+        self.assertEqual(bash.returncode, 0, msg=bash.stderr)
+
+        for text in (zsh.stdout, bash.stdout):
+            add_line = next(line for line in text.splitlines() if 'add_opts=' in line)
+            assess_line = next(line for line in text.splitlines() if 'assess_opts=' in line)
+            verify_line = next(line for line in text.splitlines() if 'verify_opts=' in line)
+            update_line = next(line for line in text.splitlines() if 'update_opts=' in line)
+
+            self.assertIn('--target-account', add_line)
+            self.assertIn('--summary', assess_line)
+            self.assertIn('--principals-allowed', verify_line)
+            self.assertIn('--source', update_line)
+
+            self.assertNotIn('--summary', add_line)
+            self.assertNotIn('--dmsa-name', assess_line)
+            self.assertNotIn('--target-account', verify_line)
+            self.assertNotIn('--no-banner', update_line)
+            self.assertNotIn('--version', add_line)
+            self.assertNotIn('-v', add_line)
 
     def test_package_installs_only_dmsaforge_console_script(self):
         with open(os.path.join(REPO_ROOT, 'pyproject.toml'), 'r', encoding='utf-8') as handle:

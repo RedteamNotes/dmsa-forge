@@ -4445,6 +4445,7 @@ def build_subcommand_parser():
         'plan',
         help='Dry-run shorthand for an action.',
         description='Use "dmsaforge plan ACTION ..." as shorthand for "dmsaforge ACTION ... --dry-run".',
+        formatter_class=WideHelpFormatter,
     )
     plan_parser.set_defaults(action='plan', command='plan', action_first=True)
     plan_parser.add_argument('plan_args', nargs=argparse.REMAINDER, help='Action and action arguments.')
@@ -4456,6 +4457,8 @@ def build_subcommand_parser():
             'Update dmsaforge in the Python environment that is running this command. '
             'This works for a venv or a pipx-managed app environment.'
         ),
+        epilog='More information: %s    Email: 888256@gmail.com' % PROJECT_URL,
+        formatter_class=WideHelpFormatter,
     )
     update_parser.set_defaults(action='update', command='update', action_first=True)
     update_parser.add_argument('--dry-run', action='store_true', help='Print the pip command without running it.')
@@ -4894,9 +4897,8 @@ def run_update(options):
 
 def completion_script(shell):
     commands = ' '.join(ACTION_CHOICES + ('plan', 'update'))
-    common_options = ' '.join([
+    action_options = ' '.join([
         '--help', '-h',
-        '--version', '-v',
         '--profile',
         '--dry-run', '--plan',
         '--json', '--output', '--output-only',
@@ -4905,57 +4907,122 @@ def completion_script(shell):
         '--scope-domain', '--scope-base-dn',
         '--dc-host', '--dc-ip',
         '-m', '--method', '-p', '--port',
-        '-d', '--dmsa-name', '-o', '--ou', '--target-ou', '-t', '--target-account',
-        '--summary', '--include-security-descriptor', '--resolve-names',
     ])
+    assess_options = '%s %s' % (
+        action_options,
+        '--ou --target-ou -o --summary --include-security-descriptor --resolve-names --skip-dc-prereq',
+    )
+    add_options = '%s %s' % (
+        action_options,
+        '-d --dmsa-name -o --ou --target-ou -t --target-account --principals-allowed --dns-hostname',
+    )
+    verify_options = '%s %s' % (
+        action_options,
+        '-d --dmsa-name -o --ou --target-ou --principals-allowed',
+    )
+    delete_options = '%s %s' % (
+        action_options,
+        '-d --dmsa-name -o --ou --target-ou --yes',
+    )
+    root_options = '--help -h --version -v'
     update_options = '--help -h --dry-run --source --force --quiet'
+    action_names = ' '.join(ACTION_CHOICES)
     if shell == 'bash':
         return '''# dmsaforge bash completion
 _dmsaforge_completion() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
   local command="${COMP_WORDS[1]}"
+  local plan_action="${COMP_WORDS[2]}"
+  local root_opts="%s"
+  local assess_opts="%s"
+  local add_opts="%s"
+  local verify_opts="%s"
+  local delete_opts="%s"
   local update_opts="%s"
   if [[ ${COMP_CWORD} -eq 1 ]]; then
+    COMPREPLY=( $(compgen -W "%s $root_opts" -- "$cur") )
+    return 0
+  fi
+  if [[ "$command" == "plan" && ${COMP_CWORD} -eq 2 ]]; then
     COMPREPLY=( $(compgen -W "%s" -- "$cur") )
     return 0
   fi
   case "$cur" in
     --*)
-      if [[ "$command" == "update" ]]; then
-        COMPREPLY=( $(compgen -W "$update_opts" -- "$cur") )
-      else
-        COMPREPLY=( $(compgen -W "%s" -- "$cur") )
-      fi
+      local option_source="$root_opts"
+      case "$command" in
+        assess) option_source="$assess_opts" ;;
+        add) option_source="$add_opts" ;;
+        verify) option_source="$verify_opts" ;;
+        delete) option_source="$delete_opts" ;;
+        update) option_source="$update_opts" ;;
+        plan)
+          case "$plan_action" in
+            assess) option_source="$assess_opts" ;;
+            add) option_source="$add_opts" ;;
+            verify) option_source="$verify_opts" ;;
+            delete) option_source="$delete_opts" ;;
+          esac
+          ;;
+      esac
+      COMPREPLY=( $(compgen -W "$option_source" -- "$cur") )
       return 0
       ;;
   esac
 }
 complete -F _dmsaforge_completion dmsaforge
-''' % (update_options, commands, common_options)
+''' % (root_options, assess_options, add_options, verify_options, delete_options, update_options, commands, action_names)
     return '''# dmsaforge zsh completion
 # No-persistence use for the current shell:
 #   eval "$(dmsaforge --completion-script zsh)"
 # For persistent use, save this output as a file on your fpath.
 _dmsaforge() {
-  local -a commands common_opts update_opts
+  local -a commands root_opts assess_opts add_opts verify_opts delete_opts update_opts action_names
   commands=(%s)
-  common_opts=(%s)
+  root_opts=(%s)
+  assess_opts=(%s)
+  add_opts=(%s)
+  verify_opts=(%s)
+  delete_opts=(%s)
   update_opts=(%s)
+  action_names=(%s)
   if (( CURRENT == 2 )); then
     _describe 'command' commands
+    _describe 'option' root_opts
     return
   fi
-  if [[ "${words[2]}" == "update" ]]; then
-    _describe 'option' update_opts
-  else
-    _describe 'option' common_opts
+  if [[ "${words[2]}" == "plan" && CURRENT == 3 ]]; then
+    _describe 'action' action_names
+    return
   fi
+  case "${words[2]}" in
+    assess) _describe 'option' assess_opts ;;
+    add) _describe 'option' add_opts ;;
+    verify) _describe 'option' verify_opts ;;
+    delete) _describe 'option' delete_opts ;;
+    update) _describe 'option' update_opts ;;
+    plan)
+      case "${words[3]}" in
+        assess) _describe 'option' assess_opts ;;
+        add) _describe 'option' add_opts ;;
+        verify) _describe 'option' verify_opts ;;
+        delete) _describe 'option' delete_opts ;;
+        *) _describe 'option' root_opts ;;
+      esac
+      ;;
+    *) _describe 'option' root_opts ;;
+  esac
 }
 compdef _dmsaforge dmsaforge
 ''' % (
         ' '.join('"%s:%s"' % (command, ACTION_SUMMARY.get(command, command)) for command in ACTION_CHOICES) + ' "plan:dry-run shorthand" "update:update current environment"',
-        ' '.join('"%s"' % option for option in common_options.split()),
+        ' '.join('"%s"' % option for option in root_options.split()),
+        ' '.join('"%s"' % option for option in assess_options.split()),
+        ' '.join('"%s"' % option for option in add_options.split()),
+        ' '.join('"%s"' % option for option in verify_options.split()),
+        ' '.join('"%s"' % option for option in delete_options.split()),
         ' '.join('"%s"' % option for option in update_options.split()),
+        ' '.join('"%s"' % action for action in ACTION_CHOICES),
     )
 
 

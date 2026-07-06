@@ -1,3 +1,3 @@
 """dMSA Forge package metadata."""
 
-__version__ = "0.5.19"
+__version__ = "0.5.20"
