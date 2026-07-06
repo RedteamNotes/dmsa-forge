@@ -7,8 +7,8 @@ This page keeps compatibility and automation details out of the main README.
 Use action-specific help for the shortest useful option list:
 
 ```bash
-dmsa-forge add -h
-dmsa-forge assess -h
+dmsaforge add -h
+dmsaforge assess -h
 ```
 
 Action help is intentionally short. Keep detailed authentication, reporting, retry, and compatibility behavior in this document instead of expanding terminal help.
@@ -18,17 +18,17 @@ Action help is intentionally short. Keep detailed authentication, reporting, ret
 dMSA Forge keeps runtime state visible in the command line and does not load project configuration files. Common values are inferred from explicit command arguments:
 
 - `DOMAIN/user` infers `--scope-domain`, `--scope-base-dn`, and `--base-dn`.
-- If `DOMAIN/user` is not a DNS FQDN, a valid `--target-ou` DN can infer the domain scope and base DN.
+- If `DOMAIN/user` is not a DNS FQDN, a valid `-o/--ou` DN can infer the domain scope and base DN.
 - A valid explicit `--scope-base-dn` supplies the default `--base-dn` when no base DN is provided.
-- `--method` defaults to `LDAP`, and `--port` defaults to `389`.
-- When neither `--method` nor `--port` is explicit, execution tries LDAP/389 first and can try LDAPS/636 only if the first connection fails.
-- A lone `--port 636` infers `LDAPS`; a lone `--port 389` infers `LDAP`.
-- `--method LDAPS` defaults to port `636`; explicitly setting either connection option disables method/port trial.
-- For `add` execution, `--target-account` is required and defines the account DN written to `msDS-ManagedAccountPrecededByLink`.
-- `--dns-hostname` defaults to `<dmsa-name>.<account-domain>` when `--dmsa-name` is set.
+- `-m/--method` defaults to `LDAP`, and `-p/--port` defaults to `389`.
+- When neither method nor port is explicit, execution tries LDAP/389 first and can try LDAPS/636 only if the first connection fails.
+- A lone `-p 636` infers `LDAPS`; a lone `-p 389` infers `LDAP`.
+- `-m LDAPS` defaults to port `636`; explicitly setting either connection option disables method/port trial.
+- For `add` execution, `-t/--target-account` is required and defines the account DN written to `msDS-ManagedAccountPrecededByLink`.
+- `--dns-hostname` defaults to `<dmsa-name>.<account-domain>` when `-d/--dmsa-name` is set.
 - For `add` execution, `--principals-allowed` is required and defines the SID written to `msDS-GroupMSAMembership`.
 - Automatic DC IP resolution is local DNS only. It does not ping or probe, and it rejects special-use results before using them for Kerberos command guidance.
-- For `assess`, `--target-ou` narrows the OU assessment base, and the Domain Controller prerequisite check is best-effort.
+- For `assess`, `-o/--ou` narrows the OU assessment base, and the Domain Controller prerequisite check is best-effort.
 
 Explicit flags always override inferred values. Use `--dc-host` for a specific DC hostname and `--dc-ip` only when DNS or routing requires an IP override. Inference decisions and connection candidates are recorded in terminal output and structured reports.
 
@@ -36,14 +36,14 @@ Target account and `--principals-allowed` name resolution prefer exact `sAMAccou
 
 ## Local Wrappers
 
-Generated `next_steps` commands inherit a detected proxychains wrapper, so a run started as `proxychains -f chain1080.conf -q dmsa-forge ...` suggests follow-up commands with the same prefix. If a local wrapper cannot be inferred, pass `--next-step-prefix 'proxychains -f chain1080.conf -q'`.
+Generated `next_steps` commands inherit a detected proxychains wrapper, so a run started as `proxychains -f chain1080.conf -q dmsaforge ...` suggests follow-up commands with the same prefix. If a local wrapper cannot be inferred, pass `--next-step-prefix 'proxychains -f chain1080.conf -q'`.
 
 ## Plan Shorthand
 
-`dmsa-forge plan ACTION ...` is shorthand for `dmsa-forge ACTION ... --dry-run`.
+`dmsaforge plan ACTION ...` is shorthand for `dmsaforge ACTION ... --dry-run`.
 
 ```bash
-dmsa-forge plan add redteamnotes.com/operator --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account Administrator --principals-allowed SID_OR_NAME
+dmsaforge plan add redteamnotes.com/operator -o 'OU=Dev,DC=redteamnotes,DC=com' -d redpen -t Administrator --principals-allowed SID_OR_NAME
 ```
 
 It uses the same validation and report format as normal dry-run mode.
@@ -85,7 +85,7 @@ LDAP action failures try to preserve the local decision point in structured outp
 
 Common local validation failures are intentionally caught before LDAP execution:
 
-- `--dmsa-name` must be a DNS-safe label such as `redpen` or `dMSA-REDPEN01`;
+- `-d/--dmsa-name` must be a DNS-safe label such as `redpen` or `dMSA-REDPEN01`;
 - `--dns-hostname` must be a fully qualified DNS hostname such as `redpen.redteamnotes.com`;
 - `--scope-domain` and `--scope-base-dn` must agree for execution workflows.
 

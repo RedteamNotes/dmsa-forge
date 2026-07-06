@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compatibility launcher for running dMSA Forge from a source checkout."""
+"""Source-checkout launcher for running dMSA Forge."""
 
 import sys
 

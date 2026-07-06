@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dmsa-forge"
-version = "0.5.14"
+version = "0.5.15"
 description = "A redteaming tool for authorized BadSuccessor LDAP exploitation on dMSA: assess, add, verify, and delete."
 readme = "README.md"
 requires-python = ">=3.8"
@@ -34,7 +34,6 @@ Repository = "https://github.com/RedteamNotes/dmsa-forge"
 Issues = "https://github.com/RedteamNotes/dmsa-forge/issues"
 
 [project.scripts]
-dmsa-forge = "dmsa_forge.cli:main"
 dmsaforge = "dmsa_forge.cli:main"
 
 [tool.setuptools.packages.find]

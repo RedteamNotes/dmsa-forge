@@ -137,7 +137,7 @@ class CLIBehaviorTests(unittest.TestCase):
             result = run_cli(command)
             self.assertEqual(result.returncode, 2)
             self.assertIn('was removed', result.stderr)
-            self.assertIn('dmsa-forge ACTION -h', result.stderr)
+            self.assertIn('dmsaforge ACTION -h', result.stderr)
 
     def test_startup_banner_is_professional_and_local(self):
         output = io.StringIO()
@@ -199,7 +199,9 @@ class CLIBehaviorTests(unittest.TestCase):
         result = run_cli('add', '-h')
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertIn('usage: dmsa-forge add [domain/]username[:password] --target-ou OU_DN [options]', result.stdout)
+        self.assertIn('usage: dmsaforge add [domain/]username[:password] -o OU_DN [options]', result.stdout)
+        self.assertIn('-o, --ou, --target-ou OU_DN', result.stdout)
+        self.assertIn('-d, --dmsa-name NAME', result.stdout)
         self.assertIn('--target-account', result.stdout)
 
     def test_unknown_action_specific_help_fails_cleanly(self):
@@ -222,7 +224,7 @@ class CLIBehaviorTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 2)
         self.assertIn('--action was removed', result.stderr)
-        self.assertIn('dmsa-forge add', result.stderr)
+        self.assertIn('dmsaforge add', result.stderr)
 
     def test_account_first_workflow_is_removed(self):
         result = run_cli('test.local/admin:pw')
@@ -235,23 +237,23 @@ class CLIBehaviorTests(unittest.TestCase):
         result = run_cli('-h', env_overrides={'SHELL': '/bin/zsh'})
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertIn('usage: dmsa-forge', result.stdout)
+        self.assertIn('usage: dmsaforge', result.stdout)
         self.assertIn('assess', result.stdout)
         self.assertIn('add', result.stdout)
         self.assertIn('update', result.stdout)
         self.assertNotIn('Diagnostics:', result.stdout)
         self.assertNotIn('local readiness:', result.stdout)
-        self.assertNotIn('dmsa-forge doctor', result.stdout)
-        self.assertNotIn('dmsa-forge doctor [domain/]username[:password]', result.stdout)
+        self.assertNotIn('dmsaforge doctor', result.stdout)
+        self.assertNotIn('dmsaforge doctor [domain/]username[:password]', result.stdout)
         self.assertNotIn('doctor       Inspect local inputs without LDAP writes.', result.stdout)
         self.assertNotIn(cli.TOOL_DESCRIPTION + '\n\npositional arguments:', result.stdout)
-        self.assertIn('Use "dmsa-forge ACTION -h" for action-specific options.', result.stdout)
+        self.assertIn('Use "dmsaforge ACTION -h" for action-specific options.', result.stdout)
         self.assertNotIn('Completion for this shell session', result.stdout)
         self.assertIn('-v, --version', result.stdout)
         self.assertNotIn('--version, -v', result.stdout)
         self.assertNotIn('Legacy', result.stdout)
         self.assertNotIn('LDAP' + '-stage research', result.stdout)
-        self.assertNotIn('eval "$(dmsa-forge --completion-script zsh)"', result.stdout)
+        self.assertNotIn('eval "$(dmsaforge --completion-script zsh)"', result.stdout)
         self.assertNotIn('actions', result.stdout)
         self.assertNotIn('examples', result.stdout)
 
@@ -259,14 +261,14 @@ class CLIBehaviorTests(unittest.TestCase):
         result = run_cli(env_overrides={'SHELL': '/bin/zsh'})
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertIn('usage: dmsa-forge', result.stdout)
+        self.assertIn('usage: dmsaforge', result.stdout)
         self.assertIn('assess', result.stdout)
         self.assertNotIn('Diagnostics:', result.stdout)
         self.assertNotIn('local readiness:', result.stdout)
-        self.assertNotIn('dmsa-forge doctor', result.stdout)
-        self.assertNotIn('dmsa-forge doctor [domain/]username[:password]', result.stdout)
+        self.assertNotIn('dmsaforge doctor', result.stdout)
+        self.assertNotIn('dmsaforge doctor [domain/]username[:password]', result.stdout)
         self.assertNotIn('doctor       Inspect local inputs without LDAP writes.', result.stdout)
-        self.assertIn('Use "dmsa-forge ACTION -h" for action-specific options.', result.stdout)
+        self.assertIn('Use "dmsaforge ACTION -h" for action-specific options.', result.stdout)
         self.assertNotIn('Completion for this shell session', result.stdout)
         self.assertIn('-v, --version', result.stdout)
         self.assertNotIn('Legacy', result.stdout)
@@ -325,27 +327,36 @@ class CLIBehaviorTests(unittest.TestCase):
         result = run_cli('add', '-h')
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertIn('usage: dmsa-forge add', result.stdout)
+        self.assertTrue(result.stdout.startswith('%s %s - by %s\n\nusage:' % (cli.TOOL_NAME, cli.TOOL_VERSION, cli.MODIFICATIONS_BY)))
+        self.assertIn('usage: dmsaforge add', result.stdout)
         self.assertIn('--target-account', result.stdout)
-        assert_options_heading(self, result.stdout)
+        self.assertIn('main:', result.stdout)
+        self.assertIn('options:', result.stdout)
         self.assertNotIn('local controls:', result.stdout)
-        self.assertIn('workflow:', result.stdout)
+        self.assertNotIn('workflow:', result.stdout)
         self.assertIn('LDAP:', result.stdout)
         self.assertNotIn('--help-advanced', result.stdout)
         self.assertNotIn('\\\n', result.stdout)
+        self.assertNotIn(cli.TOOL_DESCRIPTION, result.stdout)
+        self.assertNotIn(".-.| | \\/ | `-.  /___\\   ____ |--- .-. .--..-.. .-.", result.stdout)
         self.assertNotIn('--hashes', result.stdout)
         self.assertNotIn(', -dc-host', result.stdout)
         self.assertNotIn(', -target-ou', result.stdout)
         self.assertNotIn(', -method', result.stdout)
         self.assertNotIn('--allow-admin-fallback', result.stdout)
         self.assertNotIn('--next-step-prefix', result.stdout)
+        self.assertIn('More information: %s    Email: 888256@gmail.com' % cli.PROJECT_URL, result.stdout)
+        self.assertLess(result.stdout.index('positional arguments:'), result.stdout.index('main:'))
+        self.assertLess(result.stdout.index('main:'), result.stdout.index('LDAP:'))
+        self.assertLess(result.stdout.index('LDAP:'), result.stdout.index('options:'))
 
     def test_assess_help_keeps_summary_out_of_description(self):
         result = run_cli('assess', '-h')
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         description = result.stdout.split('positional arguments:', 1)[0]
-        self.assertIn('assessment:', result.stdout)
+        self.assertIn('main:', result.stdout)
+        self.assertNotIn('assessment:', result.stdout)
         self.assertIn('LDAP:', result.stdout)
         self.assertIn('--summary', result.stdout)
         self.assertNotIn('--summary', description)
@@ -367,7 +378,7 @@ class CLIBehaviorTests(unittest.TestCase):
         assert_options_heading(self, result.stdout)
         self.assertNotIn('local controls:', result.stdout)
 
-    def test_action_help_prints_banner_on_interactive_terminal(self):
+    def test_action_help_prints_compact_header_without_banner_on_interactive_terminal(self):
         output = io.StringIO()
         original_should_show_banner = cli.should_show_banner
         try:
@@ -380,8 +391,10 @@ class CLIBehaviorTests(unittest.TestCase):
         text = output.getvalue()
         self.assertEqual(result, 0)
         self.assertIn('%s %s - by %s' % (cli.TOOL_NAME, cli.TOOL_VERSION, cli.MODIFICATIONS_BY), text)
+        self.assertNotIn(cli.TOOL_DESCRIPTION, text)
+        self.assertNotIn(".-.| | \\/ | `-.  /___\\   ____ |--- .-. .--..-.. .-.", text)
         self.assertIn(cli.PROJECT_URL, text)
-        self.assertIn('usage: dmsa-forge assess', text)
+        self.assertIn('usage: dmsaforge assess', text)
 
     def test_empty_action_commands_print_action_help(self):
         for action in ('assess', 'add', 'verify', 'delete'):
@@ -389,7 +402,7 @@ class CLIBehaviorTests(unittest.TestCase):
                 result = run_cli(action)
 
                 self.assertEqual(result.returncode, 0, msg=result.stderr)
-                self.assertIn('usage: dmsa-forge %s' % action, result.stdout)
+                self.assertIn('usage: dmsaforge %s' % action, result.stdout)
                 self.assertIn('[domain/]username[:password]', result.stdout)
                 self.assertEqual(result.stderr, '')
 
@@ -398,6 +411,40 @@ class CLIBehaviorTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 2)
         self.assertIn('unrecognized arguments: -dc-host', result.stderr)
+
+    def test_short_options_parse_real_values(self):
+        result = run_cli(
+            'plan',
+            'add',
+            'test.local/admin:pw',
+            '-m',
+            'LDAP',
+            '-p',
+            '389',
+            '-o',
+            'OU=Staff,DC=test,DC=local',
+            '-d',
+            'redpen',
+            '-t',
+            'Administrator',
+            '--principals-allowed',
+            'S-1-5-21-1-2-3-1604',
+            '--output-only',
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload['connection']['method'], 'LDAP')
+        self.assertEqual(payload['connection']['port'], 389)
+        self.assertEqual(payload['inputs']['target_ou'], 'OU=Staff,DC=test,DC=local')
+        self.assertEqual(payload['inputs']['dmsa_name'], 'redpen')
+        self.assertEqual(payload['inputs']['target_account'], 'Administrator')
+        command = payload['result']['next_steps'][0]['command']
+        self.assertIn('-m LDAP', command)
+        self.assertIn('-p 389', command)
+        self.assertIn('-o OU=Staff,DC=test,DC=local', command)
+        self.assertIn('-d redpen', command)
+        self.assertIn('-t Administrator', command)
 
     def test_action_advanced_help_is_removed(self):
         result = run_cli('add', 'test.local/admin:pw', '--help-advanced')
@@ -421,10 +468,9 @@ class CLIBehaviorTests(unittest.TestCase):
 
         self.assertEqual(zsh.returncode, 0, msg=zsh.stderr)
         self.assertEqual(bash.returncode, 0, msg=bash.stderr)
-        self.assertIn('eval "$(dmsa-forge --completion-script zsh)"', zsh.stdout)
-        self.assertIn('compdef _dmsa_forge dmsa-forge dmsaforge', zsh.stdout)
-        self.assertIn('complete -F _dmsa_forge_completion dmsa-forge', bash.stdout)
-        self.assertIn('complete -F _dmsa_forge_completion dmsaforge', bash.stdout)
+        self.assertIn('eval "$(dmsaforge --completion-script zsh)"', zsh.stdout)
+        self.assertIn('compdef _dmsaforge dmsaforge', zsh.stdout)
+        self.assertIn('complete -F _dmsaforge_completion dmsaforge', bash.stdout)
         self.assertIn('update', zsh.stdout)
         self.assertIn('update', bash.stdout)
         self.assertNotIn('actions', zsh.stdout)
@@ -441,11 +487,11 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertNotIn('--include-sd', zsh.stdout)
         self.assertNotIn('--include-sd', bash.stdout)
 
-    def test_package_installs_collision_safe_alias(self):
+    def test_package_installs_only_dmsaforge_console_script(self):
         with open(os.path.join(REPO_ROOT, 'pyproject.toml'), 'r', encoding='utf-8') as handle:
             pyproject = handle.read()
 
-        self.assertIn('dmsa-forge = "dmsa_forge.cli:main"', pyproject)
+        self.assertNotIn('dmsa-forge = "dmsa_forge.cli:main"', pyproject)
         self.assertIn('dmsaforge = "dmsa_forge.cli:main"', pyproject)
 
     def test_config_command_and_option_are_removed(self):
@@ -485,9 +531,9 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertIn('--completion-script zsh', completion.stderr)
         self.assertIn('unrecognized action: search', search.stderr)
         self.assertNotIn('was removed', search.stderr)
-        self.assertIn('dmsa-forge ACTION -h', actions.stderr)
-        self.assertIn('dmsa-forge ACTION -h', examples.stderr)
-        self.assertIn('dmsa-forge ACTION -h', help_command.stderr)
+        self.assertIn('dmsaforge ACTION -h', actions.stderr)
+        self.assertIn('dmsaforge ACTION -h', examples.stderr)
+        self.assertIn('dmsaforge ACTION -h', help_command.stderr)
         self.assertIn('--action was removed', legacy_modify.stderr)
         self.assertIn('--action was removed', legacy_search.stderr)
 
@@ -512,26 +558,6 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertIn('Current version:', result.stdout)
         self.assertIn('No update required; versions match.', result.stdout)
         self.assertNotIn('Update command:', result.stdout)
-
-    def test_update_stays_quiet_when_cwd_contains_command_named_checkout(self):
-        source = '%s@%s' % (cli.DEFAULT_UPDATE_SOURCE, cli.TOOL_VERSION)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            os.mkdir(os.path.join(tmpdir, 'dmsa-forge'))
-            result = run_cli('update', '--dry-run', '--no-banner', '--source', source, cwd=tmpdir)
-
-        self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertIn('No update required; versions match.', result.stdout)
-        self.assertNotIn('current directory contains', result.stdout)
-        self.assertNotIn('dmsaforge', result.stdout)
-
-    def test_update_quiet_stays_quiet_when_cwd_contains_command_named_checkout(self):
-        source = '%s@%s' % (cli.DEFAULT_UPDATE_SOURCE, cli.TOOL_VERSION)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            os.mkdir(os.path.join(tmpdir, 'dmsa-forge'))
-            result = run_cli('update', '--dry-run', '--no-banner', '--quiet', '--source', source, cwd=tmpdir)
-
-        self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertNotIn('current directory contains', result.stdout)
 
     def test_update_unknown_source_requires_force(self):
         result = run_cli('update', '--dry-run', '--no-banner', '--source', 'git+https://example.test/project.git')
@@ -598,7 +624,7 @@ class CLIBehaviorTests(unittest.TestCase):
         result = run_cli('add', *BASE_ARGS, '--dmsa-name', 'bad,name', '--dry-run', '--output-only')
 
         self.assertEqual(result.returncode, 2)
-        self.assertIn('--dmsa-name must be a DNS-safe label', result.stderr)
+        self.assertIn('-d/--dmsa-name must be a DNS-safe label', result.stderr)
 
     def test_execute_rejects_invalid_dns_hostname_before_ldap(self):
         result = run_cli('add', *BASE_ARGS, '--dns-hostname', 'not-a-fqdn', '--dry-run', '--output-only')
@@ -659,7 +685,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertTrue(payload['controls']['quiet'])
         self.assertTrue(payload['controls']['no_banner'])
         self.assertIn('next_steps', payload['result'])
-        self.assertIn('dmsa-forge add test.local/admin:pw', payload['result']['next_steps'][0]['command'])
+        self.assertIn('dmsaforge add test.local/admin:pw', payload['result']['next_steps'][0]['command'])
         self.assertEqual(payload['controls']['next_step_prefix'], '(none)')
 
     def test_human_add_dry_run_shows_badsuccessor_values_not_ldap_json(self):
@@ -766,7 +792,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         payload = json.loads(result.stdout)
         command = payload['result']['next_steps'][0]['command']
-        self.assertEqual(command, 'dmsa-forge assess test.local/admin:pw')
+        self.assertEqual(command, 'dmsaforge assess test.local/admin:pw')
 
     def test_assess_summary_dry_run_next_step_preserves_summary(self):
         result = run_cli(
@@ -780,7 +806,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         payload = json.loads(result.stdout)
         command = payload['result']['next_steps'][0]['command']
-        self.assertEqual(command, 'dmsa-forge assess test.local/admin:pw --summary')
+        self.assertEqual(command, 'dmsaforge assess test.local/admin:pw --summary')
 
     def test_add_execution_requires_target_account_and_principals_allowed(self):
         result = run_cli(
@@ -794,8 +820,8 @@ class CLIBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 2)
-        self.assertIn('Action "add" execution requires: --target-account, --principals-allowed', result.stderr)
-        self.assertIn('dmsa-forge plan add', result.stderr)
+        self.assertIn('Action "add" execution requires: -t/--target-account, --principals-allowed', result.stderr)
+        self.assertIn('dmsaforge plan add', result.stderr)
 
     def test_human_next_step_suggests_dmsa_name_from_target_account(self):
         result = run_cli(
@@ -821,7 +847,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertIn('Next steps', output)
         self.assertIn(
-            "proxychains -f chain1080.conf -q dmsa-forge add eighteen.htb/adam.scott:iloveyou1 --dc-host dc01.eighteen.htb --target-ou OU=Staff,DC=eighteen,DC=htb --dmsa-name redpen --target-account Administrator --principals-allowed S-1-5-21-1152179935-589108180-1989892463-1604",
+            "proxychains -f chain1080.conf -q dmsaforge add eighteen.htb/adam.scott:iloveyou1 --dc-host dc01.eighteen.htb -o OU=Staff,DC=eighteen,DC=htb -d redpen -t Administrator --principals-allowed S-1-5-21-1152179935-589108180-1989892463-1604",
             output,
         )
         self.assertNotIn('<TARGET_ACCOUNT_DN_OR_SAM>', output)
@@ -844,7 +870,7 @@ class CLIBehaviorTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         command = payload['result']['next_steps'][0]['command']
         self.assertTrue(
-            command.startswith('proxychains -f chain1080.conf -q dmsa-forge add test.local/admin:pw'),
+            command.startswith('proxychains -f chain1080.conf -q dmsaforge add test.local/admin:pw'),
             msg=command,
         )
         self.assertEqual(payload['controls']['next_step_prefix'], 'proxychains -f chain1080.conf -q')
@@ -861,7 +887,7 @@ class CLIBehaviorTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         payload = json.loads(result.stdout)
-        self.assertTrue(payload['result']['next_steps'][0]['command'].startswith('proxychains -f chain1080.conf -q dmsa-forge add'))
+        self.assertTrue(payload['result']['next_steps'][0]['command'].startswith('proxychains -f chain1080.conf -q dmsaforge add'))
 
     def test_add_success_next_steps_include_direct_kerberos_commands(self):
         options = execution_options(
@@ -1068,12 +1094,12 @@ class CLIBehaviorTests(unittest.TestCase):
 
         command = report['result']['next_steps'][0]['command']
         self.assertEqual(report['result']['next_steps'][0]['label'], 'Review add plan for discovered principal')
-        self.assertIn('dmsa-forge plan add test.local/admin:pw', command)
+        self.assertIn('dmsaforge plan add test.local/admin:pw', command)
         self.assertIn('--dc-host dc01.test.local', command)
-        self.assertIn('--target-ou OU=Staff,DC=test,DC=local', command)
-        self.assertIn('--dmsa-name redpen', command)
+        self.assertIn('-o OU=Staff,DC=test,DC=local', command)
+        self.assertIn('-d redpen', command)
         self.assertIn('--principals-allowed S-1-5-21-1-2-3-1604', command)
-        self.assertIn('--target-account Administrator', command)
+        self.assertIn('-t Administrator', command)
         self.assertNotIn('<TARGET_ACCOUNT_DN_OR_SAM>', command)
         self.assertNotIn('hint', report['result']['next_steps'][0])
         self.assertNotIn('_next_step_candidates', report['result'])
@@ -1102,8 +1128,8 @@ class CLIBehaviorTests(unittest.TestCase):
         cli.attach_next_steps(report, options, mode='execute', success=True)
 
         command = report['result']['next_steps'][0]['command']
-        self.assertTrue(command.startswith('proxychains -f chain1080.conf -q dmsa-forge plan add'))
-        self.assertIn('--dmsa-name redpen', command)
+        self.assertTrue(command.startswith('proxychains -f chain1080.conf -q dmsaforge plan add'))
+        self.assertIn('-d redpen', command)
 
     def test_rejected_dc_ip_next_step_reruns_current_action_first(self):
         options = execution_options(
@@ -1141,7 +1167,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(len(steps), 1)
         self.assertEqual(steps[0]['label'], 'Rerun with a real DC IPv4')
         self.assertIn(
-            'proxychains -f chain1080.conf -q dmsa-forge assess eighteen.htb/adam.scott:iloveyou1',
+            'proxychains -f chain1080.conf -q dmsaforge assess eighteen.htb/adam.scott:iloveyou1',
             steps[0]['command'],
         )
         self.assertIn('--dc-host dc01.eighteen.htb', steps[0]['command'])
@@ -1174,11 +1200,11 @@ class CLIBehaviorTests(unittest.TestCase):
         cli.attach_next_steps(report, options, mode='execute', success=True)
 
         commands = [step['command'] for step in report['result']['next_steps']]
-        self.assertTrue(commands[0].startswith('dmsa-forge verify '))
+        self.assertTrue(commands[0].startswith('dmsaforge verify '))
         self.assertIn('--dc-ip REAL_DC_IPV4', commands[0])
-        self.assertTrue(commands[1].startswith('dmsa-forge delete '))
+        self.assertTrue(commands[1].startswith('dmsaforge delete '))
         self.assertIn('--dc-ip REAL_DC_IPV4', commands[1])
-        self.assertFalse(any(command.startswith('dmsa-forge add ') for command in commands))
+        self.assertFalse(any(command.startswith('dmsaforge add ') for command in commands))
         self.assertIn('/dc:<DC_IPV4>', '\n'.join(commands[2:]))
 
     def test_report_parsed_inputs_are_flat(self):
@@ -1472,7 +1498,7 @@ class CLIBehaviorTests(unittest.TestCase):
         forge = minimal_forge()
 
         self.assertIn(
-            'use --dmsa-name redpen',
+            'use -d/--dmsa-name redpen',
             forge._target_account_usage_hint('redpen'),
         )
         forge._dmsa_name_supplied = True

