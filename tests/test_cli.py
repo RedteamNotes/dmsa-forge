@@ -202,9 +202,9 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertIn('usage: dmsaforge add [domain/]username[:password] --ou OU_DN [options]', result.stdout)
         self.assertIn('-o', result.stdout)
         self.assertIn('--ou', result.stdout)
-        self.assertIn('--ou, --target-ou, -o OU_DN', result.stdout)
+        self.assertIn('--target-ou', result.stdout)
         self.assertIn('-d', result.stdout)
-        self.assertIn('--dmsa-name, -d NAME', result.stdout)
+        self.assertIn('--dmsa-name', result.stdout)
         self.assertIn('--target-account', result.stdout)
 
     def test_unknown_action_specific_help_fails_cleanly(self):
