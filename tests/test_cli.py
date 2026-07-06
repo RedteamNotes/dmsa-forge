@@ -322,8 +322,8 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertIn('--target-account', result.stdout)
         self.assertIn('options:', result.stdout)
         self.assertNotIn('local controls:', result.stdout)
-        self.assertNotIn('workflow:', result.stdout)
-        self.assertNotIn('LDAP:', result.stdout)
+        self.assertIn('workflow:', result.stdout)
+        self.assertIn('LDAP:', result.stdout)
         self.assertNotIn('--help-advanced', result.stdout)
         self.assertNotIn('\\\n', result.stdout)
         self.assertNotIn('--hashes', result.stdout)
@@ -332,6 +332,16 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertNotIn(', -method', result.stdout)
         self.assertNotIn('--allow-admin-fallback', result.stdout)
         self.assertNotIn('--next-step-prefix', result.stdout)
+
+    def test_assess_help_keeps_summary_out_of_description(self):
+        result = run_cli('assess', '-h')
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        description = result.stdout.split('positional arguments:', 1)[0]
+        self.assertIn('assessment:', result.stdout)
+        self.assertIn('LDAP:', result.stdout)
+        self.assertIn('--summary', result.stdout)
+        self.assertNotIn('--summary', description)
 
     def test_action_help_keeps_requirements_in_description_not_blocks(self):
         for action in ('assess', 'add', 'verify', 'delete'):
@@ -738,6 +748,19 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(payload['inputs']['target_account'], '(not set)')
         self.assertEqual(payload['inputs']['principals_allowed'], '(not set)')
 
+    def test_assess_dry_run_next_step_omits_default_security_descriptor_flag(self):
+        result = run_cli(
+            'plan',
+            'assess',
+            'test.local/admin:pw',
+            '--output-only',
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        command = payload['result']['next_steps'][0]['command']
+        self.assertEqual(command, 'dmsa-forge assess test.local/admin:pw')
+
     def test_add_execution_requires_target_account_and_principals_allowed(self):
         result = run_cli(
             'add',
@@ -971,6 +994,21 @@ class CLIBehaviorTests(unittest.TestCase):
         cli.attach_next_steps(report, options, mode='execute', success=True)
 
         self.assertEqual(report['result']['next_steps'], [])
+
+    def test_assess_next_step_keeps_security_descriptor_when_resolving_names(self):
+        options = execution_options(action='assess', include_sd=True, resolve_names=False)
+        report = {
+            'result': {
+                'mode': 'summary',
+                'ou_count': 2,
+            }
+        }
+
+        cli.attach_next_steps(report, options, mode='execute', success=True)
+
+        command = report['result']['next_steps'][0]['command']
+        self.assertIn('--include-security-descriptor', command)
+        self.assertIn('--resolve-names', command)
 
     def test_search_next_steps_start_with_add_plan_for_discovered_candidate(self):
         options = execution_options(

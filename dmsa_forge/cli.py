@@ -2644,7 +2644,7 @@ OPTION_ALIASES = {
 }
 
 ACTION_HELP = {
-    'assess': 'assess - evaluate BadSuccessor OU feasibility by reading OU security descriptors, identifying relevant rights, and checking whether the bound account matches any listed effective SID. Use --summary for a lightweight OU-only listing.',
+    'assess': 'assess - evaluate BadSuccessor OU feasibility by reading OU security descriptors, identifying relevant rights, and checking whether the bound account matches any listed effective SID.',
     'add': 'add - create and verify a dMSA object, with target OU, predecessor account, and managed-password reader validated before LDAP writes.',
     'verify': 'verify - read and validate an existing dMSA object, with target OU and dMSA name validated before LDAP reads.',
     'delete': 'delete - remove a dMSA object, requiring target OU, dMSA name, and explicit --yes confirmation before LDAP deletion.',
@@ -3853,7 +3853,7 @@ def append_workflow_options(
         append_option(parts, '--target-ou', options.target_ou)
         include_sd = options.include_sd if include_security_descriptor is None else include_security_descriptor
         resolve = options.resolve_names if resolve_names is None else resolve_names
-        append_option(parts, '--include-security-descriptor', True if include_sd else None)
+        append_option(parts, '--include-security-descriptor', True if (include_security_descriptor is True or (include_sd and resolve)) else None)
         append_option(parts, '--resolve-names', True if resolve else None)
         append_option(parts, '--skip-dc-prereq', True if options.skip_dc_prereq else None)
 
@@ -4319,7 +4319,7 @@ def add_common_local_options(parser, include_workflow=True, concise=False):
 
 
 def add_connection_options(parser, include_auth=True, show_auth=True, concise=False):
-    ldap_group = parser if concise else parser.add_argument_group('LDAP')
+    ldap_group = parser.add_argument_group('LDAP')
     hidden = argparse.SUPPRESS
     ldap_group.add_argument('--base-dn', dest='base_dn', action='store', metavar='BASE_DN', help=hidden if concise else 'Set LDAP base DN. Defaults from account domain.')
     ldap_group.add_argument('--scope-base-dn', action='store', metavar='BASE_DN', help=hidden if concise else 'Guardrail: refuse target DNs outside this base DN. Defaults from account/scope domain.')
@@ -4353,20 +4353,22 @@ def add_common_advanced_options(parser, include_workflow=True, visible=True):
 
 
 def add_dmsa_workflow_options(parser, action, concise=False):
-    workflow = parser if concise else parser.add_argument_group('workflow')
+    workflow = parser.add_argument_group('workflow')
     if action in ('add', 'verify', 'delete'):
         workflow.add_argument('--dmsa-name', dest='dmsa_name', action='store', metavar='NAME', help='dMSA name.')
         workflow.add_argument('--target-ou', dest='target_ou', action='store', metavar='OU_DN', help='Target OU DN.')
     if action == 'add':
         workflow.add_argument('--target-account', dest='target_account', action='store', metavar='ACCOUNT_OR_DN', help='Target user/computer sAMAccountName or DN.')
-    if action in ('add', 'verify'):
-        workflow.add_argument('--principals-allowed', dest='principals_allowed', action='store', metavar='USER_OR_SID', help='Expected managed-password reader.')
+    if action == 'add':
+        workflow.add_argument('--principals-allowed', dest='principals_allowed', action='store', metavar='USER_OR_SID', help='Managed-password reader SID, DN, or name.')
+    elif action == 'verify':
+        workflow.add_argument('--principals-allowed', dest='principals_allowed', action='store', metavar='USER_OR_SID', help='Expected managed-password reader SID, DN, or name for validation.')
     if action == 'add':
         workflow.add_argument('--dns-hostname', dest='dns_hostname', action='store', metavar='HOSTNAME', help='DNS hostname for the dMSA.')
     if action in DESTRUCTIVE_ACTIONS:
         workflow.add_argument('--yes', action='store_true', help='Confirm destructive action.')
     if action in ASSESS_ACTIONS:
-        search = parser if concise else parser.add_argument_group('assessment')
+        search = parser.add_argument_group('assessment')
         search.add_argument('--target-ou', dest='target_ou', action='store', metavar='OU_DN', help='Optional OU DN used as the assessment base.')
         search.add_argument('--summary', dest='search_summary', action='store_true', help='Run lightweight OU-only mode without security descriptor analysis.')
         search.add_argument('--include-security-descriptor', dest='include_sd', action='store_true', help='Request and analyze OU nTSecurityDescriptor security descriptors. This is the default unless --summary is used.')
@@ -5334,7 +5336,19 @@ def run_update(options):
 
 def completion_script(shell):
     commands = ' '.join(ACTION_CHOICES + ('plan', 'update'))
-    common_options = '--help -h --version -v --profile --dry-run --plan --json --output --output-only --quiet --no-banner --redact --no-redact --scope-domain --scope-base-dn --dc-host --dc-ip --method --port --include-security-descriptor --resolve-names'
+    common_options = ' '.join([
+        '--help', '-h',
+        '--version', '-v',
+        '--profile',
+        '--dry-run', '--plan',
+        '--json', '--output', '--output-only',
+        '--quiet', '--no-banner',
+        '--redact', '--no-redact',
+        '--scope-domain', '--scope-base-dn',
+        '--dc-host', '--dc-ip',
+        '--method', '--port',
+        '--include-security-descriptor', '--resolve-names',
+    ])
     if shell == 'bash':
         return '''# dmsa-forge bash completion
 _dmsa_forge_completion() {
