@@ -40,6 +40,7 @@ import sys
 import time
 import urllib.request
 import uuid
+import warnings
 
 from . import __version__
 
@@ -95,6 +96,11 @@ ASCII_BANNER = r'''
  `-'`-'    ' `-''       `      '    `-' '   `-`| `--'
                                             ._.'
 '''
+
+warnings.filterwarnings(
+    'ignore',
+    message=r'Python 3\.8 is no longer supported by the Python core team.*',
+)
 
 
 def escape_filter_chars(value):

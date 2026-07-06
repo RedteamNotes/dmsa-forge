@@ -81,6 +81,13 @@ def execution_options(**overrides):
     return cli.argparse.Namespace(**values)
 
 
+def assert_options_heading(test_case, text):
+    test_case.assertTrue(
+        'options:' in text or 'optional arguments:' in text,
+        msg='expected argparse options heading in help output',
+    )
+
+
 class DNValidationTests(unittest.TestCase):
     def test_validates_escaped_dn_and_scope(self):
         dn = r'CN=Doe\, Jane,OU=Staff,DC=test,DC=local'
@@ -320,7 +327,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertIn('usage: dmsa-forge add', result.stdout)
         self.assertIn('--target-account', result.stdout)
-        self.assertIn('options:', result.stdout)
+        assert_options_heading(self, result.stdout)
         self.assertNotIn('local controls:', result.stdout)
         self.assertIn('workflow:', result.stdout)
         self.assertIn('LDAP:', result.stdout)
@@ -357,7 +364,7 @@ class CLIBehaviorTests(unittest.TestCase):
         result = run_cli('doctor', '-h')
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertIn('options:', result.stdout)
+        assert_options_heading(self, result.stdout)
         self.assertNotIn('local controls:', result.stdout)
 
     def test_action_help_prints_banner_on_interactive_terminal(self):
