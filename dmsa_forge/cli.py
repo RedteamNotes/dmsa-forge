@@ -4977,7 +4977,7 @@ _dmsaforge_completion() {
     return 0
   fi
   case "$cur" in
-    --*)
+    -*|"")
       local option_source="$root_opts"
       case "$command" in
         assess) option_source="$assess_opts" ;;

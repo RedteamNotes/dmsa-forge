@@ -3,6 +3,7 @@ import io
 import json
 import logging
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -585,6 +586,79 @@ class CLIBehaviorTests(unittest.TestCase):
             self.assertNotIn('--no-banner', update_line)
             self.assertNotIn('--version', add_line)
             self.assertNotIn('-v', add_line)
+
+    def test_bash_completion_suggests_short_options_by_command(self):
+        with tempfile.NamedTemporaryFile('w', delete=False) as handle:
+            handle.write(cli.completion_script('bash'))
+            completion_path = handle.name
+
+        def complete(words, cword):
+            bash_words = ' '.join(shlex.quote(word) for word in words)
+            script = (
+                'source "$1"; '
+                'COMP_WORDS=(%s); '
+                'COMP_CWORD=%d; '
+                '_dmsaforge_completion; '
+                'printf "%%s\\n" "${COMPREPLY[@]}"'
+            ) % (bash_words, cword)
+            return subprocess.run(
+                ['bash', '-c', script, 'bash', completion_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+        try:
+            add = complete(('dmsaforge', 'add', '-'), 2)
+            add_empty = complete(('dmsaforge', 'add', ''), 2)
+            assess = complete(('dmsaforge', 'assess', '-'), 2)
+            assess_empty = complete(('dmsaforge', 'assess', ''), 2)
+            plan_add = complete(('dmsaforge', 'plan', 'add', '-'), 3)
+            plan_add_empty = complete(('dmsaforge', 'plan', 'add', ''), 3)
+            plan_root = complete(('dmsaforge', 'plan', '-'), 2)
+        finally:
+            os.unlink(completion_path)
+
+        self.assertEqual(add.returncode, 0, msg=add.stderr)
+        self.assertEqual(add_empty.returncode, 0, msg=add_empty.stderr)
+        self.assertEqual(assess.returncode, 0, msg=assess.stderr)
+        self.assertEqual(assess_empty.returncode, 0, msg=assess_empty.stderr)
+        self.assertEqual(plan_add.returncode, 0, msg=plan_add.stderr)
+        self.assertEqual(plan_add_empty.returncode, 0, msg=plan_add_empty.stderr)
+        self.assertEqual(plan_root.returncode, 0, msg=plan_root.stderr)
+
+        add_items = set(add.stdout.splitlines())
+        add_empty_items = set(add_empty.stdout.splitlines())
+        assess_items = set(assess.stdout.splitlines())
+        assess_empty_items = set(assess_empty.stdout.splitlines())
+        plan_add_items = set(plan_add.stdout.splitlines())
+        plan_add_empty_items = set(plan_add_empty.stdout.splitlines())
+        plan_root_items = set(plan_root.stdout.splitlines())
+
+        self.assertIn('-d', add_items)
+        self.assertIn('-o', add_items)
+        self.assertIn('-t', add_items)
+        self.assertIn('-m', add_items)
+        self.assertIn('-p', add_items)
+        self.assertNotIn('--summary', add_items)
+        self.assertIn('-d', add_empty_items)
+        self.assertIn('--target-account', add_empty_items)
+
+        self.assertIn('--summary', assess_items)
+        self.assertIn('-o', assess_items)
+        self.assertNotIn('-d', assess_items)
+        self.assertNotIn('--target-account', assess_items)
+        self.assertIn('--summary', assess_empty_items)
+        self.assertNotIn('--target-account', assess_empty_items)
+
+        self.assertIn('-d', plan_add_items)
+        self.assertIn('--target-account', plan_add_items)
+        self.assertNotIn('--summary', plan_add_items)
+        self.assertIn('-d', plan_add_empty_items)
+        self.assertIn('--target-account', plan_add_empty_items)
+
+        self.assertIn('-h', plan_root_items)
+        self.assertNotIn('-v', plan_root_items)
 
     def test_package_installs_only_dmsaforge_console_script(self):
         with open(os.path.join(REPO_ROOT, 'pyproject.toml'), 'r', encoding='utf-8') as handle:
