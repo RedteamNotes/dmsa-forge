@@ -3192,6 +3192,18 @@ def report_input_principals_allowed(options):
     return '(not set)'
 
 
+def attach_planned_badsuccessor_values(report, options):
+    if report.get('mode') != 'dry_run' or options.action != 'add':
+        return
+
+    inferred_kinds = inferred_plan_kinds(report)
+    values = {}
+    for name, value, kind in planned_bad_successor_values(options, report):
+        key = name.replace(' ', '_').replace('-', '_').lower()
+        values[key] = mark_inferred(value, kind, inferred_kinds)
+    report.setdefault('result', {}).setdefault('badsuccessor_values', values)
+
+
 def build_operation_report(options, mode, success=None, result=None):
     base_dn = current_base_dn(options)
     dmsa_dn = planned_dmsa_dn(options)
@@ -3259,6 +3271,7 @@ def build_operation_report(options, mode, success=None, result=None):
         'ldap_operations': planned_ldap_operations(options),
         'result': result or {},
     }
+    attach_planned_badsuccessor_values(report, options)
     return redact_report(report, options)
 
 

@@ -1,12 +1,12 @@
 # dMSA Forge
 
-[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.24)
+[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.25)
 [![Tests](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml/badge.svg)](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Impacket%20Apache--1.1-blue)](https://github.com/RedteamNotes/dmsa-forge/blob/main/LICENSE)
 
 **语言：** [English](../README.md) | 简体中文 | [Français](README.fr.md)
 
-当前版本：`v0.5.24`
+当前版本：`v0.5.25`
 
 面向授权 [BadSuccessor](https://www.akamai.com/blog/security-research/abusing-dmsa-for-privilege-escalation-in-active-directory) LDAP 工作流的 [dMSA](https://learn.microsoft.com/zh-cn/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview) forge：assess、add、verify、delete。
 
@@ -131,7 +131,7 @@ dmsaforge delete redteamnotes.com/operator:'PASSWORD' --dc-host dc.redteamnotes.
 
 安全控制：
 
-- 使用 `dmsaforge plan ACTION ...`、`--dry-run` 或 `--plan` 校验参数并打印计划 LDAP 操作，不会打开 LDAP 连接。
+- 使用 `dmsaforge plan ACTION ...`、`--dry-run` 或 `--plan` 校验参数并打印计划 LDAP 操作，不会打开 LDAP 连接。add 工作流的 JSON 报告会包含计划写入的 BadSuccessor 关键属性值。
 - 使用 `--profile safe` 启用默认脱敏 dry-run 预设，`--profile report` 启用 JSON 报告，`--profile ci` 启用 quiet JSON/no-banner 输出。
 - `DOMAIN/user` 会推断 `--scope-domain`、`--scope-base-dn` 和 `--base-dn`；合法的 `--scope-base-dn` 也可以提供默认 base DN。授权范围不同时再显式覆盖。
 - 未指定 `--method` 和 `--port` 时，先尝试 LDAP/389。如果连接失败，dMSA Forge 可以继续尝试 LDAPS/636，并把候选尝试写入终端输出和 JSON/文本报告。单独传 `--port 636` 会推断为 LDAPS；同时指定 method 和 port 时才要求完全匹配。

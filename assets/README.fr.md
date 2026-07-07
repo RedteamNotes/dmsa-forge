@@ -1,12 +1,12 @@
 # dMSA Forge
 
-[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.24)
+[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.25)
 [![Tests](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml/badge.svg)](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Impacket%20Apache--1.1-blue)](https://github.com/RedteamNotes/dmsa-forge/blob/main/LICENSE)
 
 **Langue :** [English](../README.md) | [简体中文](README.zh-CN.md) | Français
 
-Version actuelle : `v0.5.24`
+Version actuelle : `v0.5.25`
 
 Forge [dMSA](https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview) pour les workflows LDAP [BadSuccessor](https://www.akamai.com/blog/security-research/abusing-dmsa-for-privilege-escalation-in-active-directory) autorisés : assess, add, verify et delete.
 
@@ -131,7 +131,7 @@ La résolution du compte cible repose sur une recherche LDAP. `--target-account`
 
 Contrôles de sécurité :
 
-- Utilisez `dmsaforge plan ACTION ...`, `--dry-run` ou `--plan` pour valider les options et afficher les opérations LDAP prévues sans ouvrir de connexion LDAP.
+- Utilisez `dmsaforge plan ACTION ...`, `--dry-run` ou `--plan` pour valider les options et afficher les opérations LDAP prévues sans ouvrir de connexion LDAP. Les rapports JSON des workflows add incluent les valeurs BadSuccessor prévues.
 - Utilisez `--profile safe` pour un dry-run masqué, `--profile report` pour des rapports JSON, ou `--profile ci` pour une sortie quiet JSON/no-banner.
 - `DOMAIN/user` infère `--scope-domain`, `--scope-base-dn` et `--base-dn` ; un `--scope-base-dn` valide peut aussi fournir le base DN par défaut. Remplacez-les explicitement lorsque le périmètre autorisé diffère.
 - Quand `--method` et `--port` sont omis, LDAP/389 est tenté en premier. Si la connexion échoue, dMSA Forge peut essayer LDAPS/636 et consigne les candidats tentés dans la sortie terminale et les rapports JSON/texte. Un `--port 636` seul infère LDAPS ; définir à la fois method et port exige une paire exacte.

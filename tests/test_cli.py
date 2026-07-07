@@ -911,6 +911,14 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertTrue(payload['controls']['quiet'])
         self.assertTrue(payload['controls']['no_banner'])
         self.assertIn('next_steps', payload['result'])
+        self.assertEqual(
+            payload['result']['badsuccessor_values']['msds_delegatedmsastate'],
+            '2 - migration complete',
+        )
+        self.assertEqual(
+            payload['result']['badsuccessor_values']['msds_managedaccountprecededbylink'],
+            'DN resolved from Administrator',
+        )
         self.assertIn('dmsaforge add test.local/admin:pw', payload['result']['next_steps'][0]['command'])
         self.assertEqual(payload['controls']['next_step_prefix'], '(none)')
 
@@ -1458,7 +1466,9 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(payload['inputs']['dmsa_name'], 'redpen')
         self.assertEqual(payload['inputs']['dns_hostname'], 'redpen.test.local')
         self.assertTrue(payload['inputs']['planned_dmsa_dn'].startswith('CN=redpen,'))
-        self.assertNotIn('redpen$', result.stdout)
+        self.assertEqual(payload['result']['badsuccessor_values']['samaccountname'], 'redpen$')
+        for step in payload['result']['next_steps']:
+            self.assertNotIn('--dmsa-name redpen$', step['command'])
 
     def test_safe_profile_sets_dry_run_and_scope_from_account_domain(self):
         result = run_cli(
