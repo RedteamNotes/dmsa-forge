@@ -533,6 +533,8 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertIn('update', bash.stdout)
         self.assertIn('update_opts=', zsh.stdout)
         self.assertIn('update_opts=', bash.stdout)
+        self.assertIn('plan_opts=', zsh.stdout)
+        self.assertIn('local plan_opts=', bash.stdout)
         self.assertIn('assess_opts=', zsh.stdout)
         self.assertIn('add_opts=', zsh.stdout)
         self.assertIn('verify_opts=', zsh.stdout)
@@ -566,16 +568,20 @@ class CLIBehaviorTests(unittest.TestCase):
             add_line = next(line for line in text.splitlines() if 'add_opts=' in line)
             assess_line = next(line for line in text.splitlines() if 'assess_opts=' in line)
             verify_line = next(line for line in text.splitlines() if 'verify_opts=' in line)
+            plan_line = next(line for line in text.splitlines() if 'plan_opts=' in line)
             update_line = next(line for line in text.splitlines() if 'update_opts=' in line)
 
             self.assertIn('--target-account', add_line)
             self.assertIn('--summary', assess_line)
             self.assertIn('--principals-allowed', verify_line)
+            self.assertIn('--help', plan_line)
             self.assertIn('--source', update_line)
 
             self.assertNotIn('--summary', add_line)
             self.assertNotIn('--dmsa-name', assess_line)
             self.assertNotIn('--target-account', verify_line)
+            self.assertNotIn('--version', plan_line)
+            self.assertNotIn('-v', plan_line)
             self.assertNotIn('--no-banner', update_line)
             self.assertNotIn('--version', add_line)
             self.assertNotIn('-v', add_line)
@@ -672,6 +678,7 @@ class CLIBehaviorTests(unittest.TestCase):
         result = run_cli('update', '--help')
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('%s %s - by %s' % (cli.TOOL_NAME, cli.TOOL_VERSION, cli.MODIFICATIONS_BY), result.stdout)
         self.assertIn('usage: dmsaforge update', result.stdout)
         self.assertNotIn('--no-banner', result.stdout)
 

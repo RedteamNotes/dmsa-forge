@@ -2785,6 +2785,11 @@ ACTION_HELP = {
     'delete': 'delete - remove a dMSA object, requiring target OU, dMSA name, and explicit --yes confirmation before LDAP deletion.',
 }
 
+UPDATE_HELP = (
+    'Update dmsaforge in the Python environment that is running this command. '
+    'This works for a venv or a pipx-managed app environment.'
+)
+
 
 def print_startup_banner():
     print('%s %s - by %s' % (TOOL_NAME, TOOL_VERSION, MODIFICATIONS_BY), flush=True)
@@ -2883,7 +2888,31 @@ def print_plan_help():
     print('Plan is equivalent to "dmsaforge ACTION ... --dry-run"; it validates local inputs and prints planned LDAP operations without opening an LDAP connection.')
     print('')
     print('More information: %s    Email: 888256@gmail.com' % PROJECT_URL)
-    return 0
+
+
+def add_update_options(parser):
+    parser.add_argument('--dry-run', action='store_true', help='Print the pip command without running it.')
+    parser.add_argument('--source', dest='update_source', default=DEFAULT_UPDATE_SOURCE, metavar='PIP_SPEC', help='pip install source. Default: %(default)s')
+    parser.add_argument('--force', action='store_true', help='Run pip even when the version check matches or cannot be completed.')
+    parser.add_argument('--quiet', action='store_true', help='Pass -q to pip and reduce local output.')
+    return parser
+
+
+def build_update_help_parser():
+    parser = argparse.ArgumentParser(
+        prog='%s update' % TOOL_NAME,
+        description=UPDATE_HELP,
+        epilog='More information: %s    Email: 888256@gmail.com' % PROJECT_URL,
+        formatter_class=WideHelpFormatter,
+    )
+    add_update_options(parser)
+    return parser
+
+
+def print_update_help():
+    print_action_help_header()
+    build_update_help_parser().print_help()
+    sys.stdout.flush()
 
 
 def apply_option_defaults(options):
@@ -4453,18 +4482,12 @@ def build_subcommand_parser():
     update_parser = subparsers.add_parser(
         'update',
         help='Update dmsaforge in the current Python environment.',
-        description=(
-            'Update dmsaforge in the Python environment that is running this command. '
-            'This works for a venv or a pipx-managed app environment.'
-        ),
+        description=UPDATE_HELP,
         epilog='More information: %s    Email: 888256@gmail.com' % PROJECT_URL,
         formatter_class=WideHelpFormatter,
     )
     update_parser.set_defaults(action='update', command='update', action_first=True)
-    update_parser.add_argument('--dry-run', action='store_true', help='Print the pip command without running it.')
-    update_parser.add_argument('--source', dest='update_source', default=DEFAULT_UPDATE_SOURCE, metavar='PIP_SPEC', help='pip install source. Default: %(default)s')
-    update_parser.add_argument('--force', action='store_true', help='Run pip even when the version check matches or cannot be completed.')
-    update_parser.add_argument('--quiet', action='store_true', help='Pass -q to pip and reduce local output.')
+    add_update_options(update_parser)
     return parser
 
 
@@ -4925,6 +4948,7 @@ def completion_script(shell):
         '-d --dmsa-name -o --ou --target-ou --yes',
     )
     root_options = '--help -h --version -v'
+    plan_options = '--help -h'
     update_options = '--help -h --dry-run --source --force --quiet'
     action_names = ' '.join(ACTION_CHOICES)
     if shell == 'bash':
@@ -4934,6 +4958,7 @@ _dmsaforge_completion() {
   local command="${COMP_WORDS[1]}"
   local plan_action="${COMP_WORDS[2]}"
   local root_opts="%s"
+  local plan_opts="%s"
   local assess_opts="%s"
   local add_opts="%s"
   local verify_opts="%s"
@@ -4944,7 +4969,11 @@ _dmsaforge_completion() {
     return 0
   fi
   if [[ "$command" == "plan" && ${COMP_CWORD} -eq 2 ]]; then
-    COMPREPLY=( $(compgen -W "%s" -- "$cur") )
+    if [[ "$cur" == -* ]]; then
+      COMPREPLY=( $(compgen -W "$plan_opts" -- "$cur") )
+    else
+      COMPREPLY=( $(compgen -W "%s" -- "$cur") )
+    fi
     return 0
   fi
   case "$cur" in
@@ -4957,6 +4986,7 @@ _dmsaforge_completion() {
         delete) option_source="$delete_opts" ;;
         update) option_source="$update_opts" ;;
         plan)
+          option_source="$plan_opts"
           case "$plan_action" in
             assess) option_source="$assess_opts" ;;
             add) option_source="$add_opts" ;;
@@ -4971,15 +5001,16 @@ _dmsaforge_completion() {
   esac
 }
 complete -F _dmsaforge_completion dmsaforge
-''' % (root_options, assess_options, add_options, verify_options, delete_options, update_options, commands, action_names)
+''' % (root_options, plan_options, assess_options, add_options, verify_options, delete_options, update_options, commands, action_names)
     return '''# dmsaforge zsh completion
 # No-persistence use for the current shell:
 #   eval "$(dmsaforge --completion-script zsh)"
 # For persistent use, save this output as a file on your fpath.
 _dmsaforge() {
-  local -a commands root_opts assess_opts add_opts verify_opts delete_opts update_opts action_names
+  local -a commands root_opts plan_opts assess_opts add_opts verify_opts delete_opts update_opts action_names
   commands=(%s)
   root_opts=(%s)
+  plan_opts=(%s)
   assess_opts=(%s)
   add_opts=(%s)
   verify_opts=(%s)
@@ -4993,6 +5024,7 @@ _dmsaforge() {
   fi
   if [[ "${words[2]}" == "plan" && CURRENT == 3 ]]; then
     _describe 'action' action_names
+    _describe 'option' plan_opts
     return
   fi
   case "${words[2]}" in
@@ -5007,7 +5039,7 @@ _dmsaforge() {
         add) _describe 'option' add_opts ;;
         verify) _describe 'option' verify_opts ;;
         delete) _describe 'option' delete_opts ;;
-        *) _describe 'option' root_opts ;;
+        *) _describe 'option' plan_opts ;;
       esac
       ;;
     *) _describe 'option' root_opts ;;
@@ -5017,6 +5049,7 @@ compdef _dmsaforge dmsaforge
 ''' % (
         ' '.join('"%s:%s"' % (command, ACTION_SUMMARY.get(command, command)) for command in ACTION_CHOICES) + ' "plan:dry-run shorthand" "update:update current environment"',
         ' '.join('"%s"' % option for option in root_options.split()),
+        ' '.join('"%s"' % option for option in plan_options.split()),
         ' '.join('"%s"' % option for option in assess_options.split()),
         ' '.join('"%s"' % option for option in add_options.split()),
         ' '.join('"%s"' % option for option in verify_options.split()),
@@ -5064,6 +5097,10 @@ def _main(argv=None):
     if len(argv) == 2 and argv[0] == '--no-banner' and argv[1] in ('-h', '--help'):
         parser = build_subcommand_parser()
         print_parser_help_with_hint(parser, no_banner=True)
+        return 0
+
+    if len(argv) == 2 and argv[0] == 'update' and argv[1] in ('-h', '--help'):
+        print_update_help()
         return 0
 
     single_dash_long = find_single_dash_long_option(argv)
