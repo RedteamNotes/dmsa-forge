@@ -1,12 +1,12 @@
 # dMSA Forge
 
-[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.22)
+[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.23)
 [![Tests](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml/badge.svg)](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Impacket%20Apache--1.1-blue)](https://github.com/RedteamNotes/dmsa-forge/blob/main/LICENSE)
 
 **Language:** English | [简体中文](assets/README.zh-CN.md) | [Français](assets/README.fr.md)
 
-Current release: `v0.5.22`
+Current release: `v0.5.23`
 
 A [dMSA](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview) forge for authorized [BadSuccessor](https://www.akamai.com/blog/security-research/abusing-dmsa-for-privilege-escalation-in-active-directory) LDAP workflows: assess, add, verify, and delete.
 
@@ -140,7 +140,7 @@ Safety controls:
 - Use `--dc-host` for a specific DC hostname and `--dc-ip` only when DNS or routing requires an IP override. Automatic DC IP resolution never probes the network; multicast, loopback, link-local, unspecified, broadcast, and reserved DNS results are rejected so proxy DNS placeholders such as `224.0.0.1` do not become Kerberos `/dc:` values.
 - For `assess`, `--ou` narrows the OU assessment base. The Domain Controller prerequisite check is best-effort; if it fails, the OU assessment continues and records a warning.
 - Target account and `--principals-allowed` name resolution prefer exact `sAMAccountName`/UPN/CN matches. Ambiguous LDAP results fail closed with a prompt to pass a full DN or SID.
-- `delete` requires `--yes`. The old `modify` workflow has been removed; use `delete`, `add`, and `verify` instead.
+- `delete` requires `--yes`. Use `add`, `verify`, and `delete` as the object lifecycle commands.
 - Local output is redacted by default. `--no-redact` requires `--debug`.
 - Use `--json` for structured reports and `--output FILE` to write the report with file mode `0600`.
 - Use `--output-only` for ultra-quiet operation. It enables `--quiet`, `--no-banner`, and defaults to `--json` unless `--output` is provided. When `--output` is used, the output file is written as JSON.

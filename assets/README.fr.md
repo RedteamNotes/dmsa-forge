@@ -1,12 +1,12 @@
 # dMSA Forge
 
-[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.22)
+[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.23)
 [![Tests](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml/badge.svg)](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Impacket%20Apache--1.1-blue)](https://github.com/RedteamNotes/dmsa-forge/blob/main/LICENSE)
 
 **Langue :** [English](../README.md) | [简体中文](README.zh-CN.md) | Français
 
-Version actuelle : `v0.5.22`
+Version actuelle : `v0.5.23`
 
 Forge [dMSA](https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview) pour les workflows LDAP [BadSuccessor](https://www.akamai.com/blog/security-research/abusing-dmsa-for-privilege-escalation-in-active-directory) autorisés : assess, add, verify et delete.
 
@@ -140,7 +140,7 @@ Contrôles de sécurité :
 - Utilisez `--dc-host` pour un DC précis, et `--dc-ip` uniquement lorsque DNS ou le routage nécessite une adresse IP explicite. La résolution automatique de l'IP du DC ne sonde jamais le réseau ; les résultats multicast, loopback, link-local, unspecified, broadcast et reserved sont rejetés afin qu'un placeholder DNS de proxy comme `224.0.0.1` ne devienne pas une valeur Kerberos `/dc:`.
 - Pour `assess`, `--ou` réduit la base d'évaluation OU. La vérification préalable du DC est best-effort ; en cas d'échec, l'évaluation OU continue et consigne un warning.
 - La résolution du compte cible et de `--principals-allowed` préfère les correspondances exactes `sAMAccountName`, UPN ou CN. Les résultats LDAP ambigus échouent proprement avec une indication de fournir un DN complet ou un SID.
-- `delete` exige `--yes`. L'ancien workflow `modify` a été supprimé ; utilisez `delete`, `add` et `verify`.
+- `delete` exige `--yes`. Utilisez `add`, `verify` et `delete` pour le cycle de vie des objets.
 - La sortie locale est masquée par défaut. `--no-redact` exige `--debug`.
 - Utilisez `--json` pour les rapports structurés et `--output FILE` pour écrire le rapport avec le mode `0600`.
 - Utilisez `--output-only` pour une exécution ultra-discrète. Cela active automatiquement `--quiet` et `--no-banner`, et bascule sur `--json` par défaut si `--output` n'est pas fourni. Avec `--output`, le fichier de sortie reste au format JSON.

@@ -133,12 +133,13 @@ class DNValidationTests(unittest.TestCase):
 
 
 class CLIBehaviorTests(unittest.TestCase):
-    def test_removed_help_utilities_return_migration_errors(self):
+    def test_unknown_utility_words_are_plain_unknown_actions(self):
         for command in ('actions', 'examples', 'help'):
-            result = run_cli(command)
+            result = run_cli(command, '-h')
             self.assertEqual(result.returncode, 2)
-            self.assertIn('was removed', result.stderr)
-            self.assertIn('dmsaforge ACTION -h', result.stderr)
+            self.assertIn('unrecognized action: %s' % command, result.stderr)
+            self.assertNotIn('was removed', result.stderr)
+            self.assertNotIn('migration', result.stderr.lower())
 
     def test_startup_banner_is_professional_and_local(self):
         output = io.StringIO()
@@ -226,7 +227,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertNotIn('Behavior:', result.stdout)
         self.assertNotIn('Usage:', result.stdout)
 
-    def test_action_flag_workflow_is_removed(self):
+    def test_action_flag_is_plain_unrecognized_argument(self):
         result = run_cli(
             'add',
             'test.local/admin:pw',
@@ -239,8 +240,8 @@ class CLIBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 2)
-        self.assertIn('--action was removed', result.stderr)
-        self.assertIn('dmsaforge add', result.stderr)
+        self.assertIn('unrecognized arguments: --action add', result.stderr)
+        self.assertNotIn('was removed', result.stderr)
 
     def test_account_first_workflow_is_removed(self):
         result = run_cli('test.local/admin:pw')
@@ -667,7 +668,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertNotIn('dmsa-forge = "dmsa_forge.cli:main"', pyproject)
         self.assertIn('dmsaforge = "dmsa_forge.cli:main"', pyproject)
 
-    def test_config_command_and_option_are_removed(self):
+    def test_config_words_are_plain_unknown_actions(self):
         command = run_cli('config', 'show')
         init = run_cli('init')
         option = run_cli('add', *BASE_ARGS, '--dry-run', '--config', 'x.toml')
@@ -675,11 +676,13 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(command.returncode, 2)
         self.assertEqual(init.returncode, 2)
         self.assertEqual(option.returncode, 2)
-        self.assertIn('no longer uses project config files', command.stderr)
-        self.assertIn('no longer uses project config files', init.stderr)
+        self.assertIn('unrecognized action: config', command.stderr)
+        self.assertIn('unrecognized action: init', init.stderr)
+        self.assertNotIn('was removed', command.stderr)
+        self.assertNotIn('was removed', init.stderr)
         self.assertIn('unrecognized arguments: --config', option.stderr)
 
-    def test_removed_actions_return_migration_errors(self):
+    def test_old_action_words_are_plain_unknown_actions(self):
         guidance = run_cli('guidance', 'test.local/admin:pw', '--dmsa-name', 'redpen')
         modify = run_cli('modify', *BASE_ARGS, '--dmsa-name', 'redpen', '--yes')
         completion = run_cli('completion', 'zsh', env_overrides={'SHELL': '/bin/zsh'})
@@ -699,16 +702,23 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(help_command.returncode, 2)
         self.assertEqual(legacy_modify.returncode, 2)
         self.assertEqual(legacy_search.returncode, 2)
-        self.assertIn('successful add/verify output includes Kerberos commands', guidance.stderr)
-        self.assertIn('use delete/add/verify', modify.stderr)
-        self.assertIn('--completion-script zsh', completion.stderr)
-        self.assertIn('unrecognized action: search', search.stderr)
-        self.assertNotIn('was removed', search.stderr)
-        self.assertIn('dmsaforge ACTION -h', actions.stderr)
-        self.assertIn('dmsaforge ACTION -h', examples.stderr)
-        self.assertIn('dmsaforge ACTION -h', help_command.stderr)
-        self.assertIn('--action was removed', legacy_modify.stderr)
-        self.assertIn('--action was removed', legacy_search.stderr)
+        for command, result in (
+            ('guidance', guidance),
+            ('modify', modify),
+            ('completion', completion),
+            ('search', search),
+            ('actions', actions),
+            ('examples', examples),
+            ('help', help_command),
+        ):
+            with self.subTest(command=command):
+                self.assertIn('unrecognized action: %s' % command, result.stderr)
+                self.assertNotIn('was removed', result.stderr)
+                self.assertNotIn('migration', result.stderr.lower())
+        self.assertIn('unrecognized action: test.local/admin:pw', legacy_modify.stderr)
+        self.assertIn('unrecognized action: test.local/admin:pw', legacy_search.stderr)
+        self.assertNotIn('--action was removed', legacy_modify.stderr)
+        self.assertNotIn('--action was removed', legacy_search.stderr)
 
     def test_update_dry_run_uses_current_python_environment(self):
         source = '%s@v0.5.3' % cli.DEFAULT_UPDATE_SOURCE
@@ -1813,16 +1823,19 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertNotIn('--kerberos-guidance', verify_help.stdout)
         self.assertEqual(verify_dry_run.returncode, 0, msg=verify_dry_run.stderr)
         self.assertEqual(guidance.returncode, 2)
-        self.assertIn('successful add/verify output includes Kerberos commands', guidance.stderr)
+        self.assertIn('unrecognized action: guidance', guidance.stderr)
+        self.assertNotIn('was removed', guidance.stderr)
 
-    def test_modify_is_fully_removed(self):
+    def test_modify_is_not_a_command(self):
         direct = run_cli('modify', *BASE_ARGS, '--dmsa-name', 'redpen', '--dry-run', '--output-only')
         legacy = run_cli('test.local/admin:pw', '--action', 'modify')
 
         self.assertEqual(direct.returncode, 2)
         self.assertEqual(legacy.returncode, 2)
-        self.assertIn('use delete/add/verify', direct.stderr)
-        self.assertIn('--action was removed', legacy.stderr)
+        self.assertIn('unrecognized action: modify', direct.stderr)
+        self.assertIn('unrecognized action: test.local/admin:pw', legacy.stderr)
+        self.assertNotIn('was removed', direct.stderr)
+        self.assertNotIn('was removed', legacy.stderr)
         self.assertNotIn('--allow-deprecated-modify', direct.stderr)
 
     def test_minimal_add_dry_run_does_not_trigger_search_only_prereq_error(self):

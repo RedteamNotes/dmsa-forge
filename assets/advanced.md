@@ -93,5 +93,3 @@ Common local validation failures are intentionally caught before LDAP execution:
 ## Compatibility
 
 `--lean` is the short preset for lighter local output and assessment defaults.
-
-The old `modify` workflow has been removed. Use `delete`, `add`, and `verify`; old `modify` commands return a migration error instead of reaching LDAP.

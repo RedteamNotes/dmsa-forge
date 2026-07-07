@@ -93,5 +93,3 @@ Les erreurs locales courantes sont bloquees avant l'execution LDAP :
 ## Compatibilite
 
 `--lean` est le preset court pour une sortie locale plus legere et des evaluations plus sobres.
-
-L'ancien workflow `modify` a ete supprime. Utilisez `delete`, `add` et `verify` ; les anciennes commandes `modify` renvoient une erreur de migration au lieu d'atteindre LDAP.

@@ -2681,7 +2681,6 @@ ACTION_REQUIREMENTS = {
     'verify': (('dmsa_name', '--dmsa-name'), ('target_ou', '--ou')),
 }
 DESTRUCTIVE_ACTIONS = ('delete',)
-REMOVED_COMMANDS = ('init', 'config', 'guidance', 'modify', 'completion', 'actions', 'examples', 'help')
 UTILITY_COMMANDS = ('plan', 'update')
 SUBCOMMAND_CHOICES = VISIBLE_ACTION_CHOICES + UTILITY_COMMANDS
 
@@ -2814,18 +2813,6 @@ def should_show_banner(options=None):
     return terminal_is_interactive()
 
 
-def detected_shell_name():
-    shell = os.path.basename(os.environ.get('SHELL', '')).lower()
-    if shell in ('bash', 'zsh'):
-        return shell
-    return 'zsh'
-
-
-def completion_eval_hint(shell=None):
-    shell = shell or detected_shell_name()
-    return 'eval "$(%s --completion-script %s)"' % (TOOL_NAME, shell)
-
-
 def print_completion_hint(shell=None):
     print('')
     print('Use "dmsaforge ACTION -h" for action-specific options.')
@@ -2850,31 +2837,6 @@ def print_action_help(action, no_banner=False):
     parser = build_action_help_parser(action)
     parser.print_help()
     sys.stdout.flush()
-
-
-def removed_command_message(command):
-    if command in ('init', 'config'):
-        return '"%s" was removed; dmsaforge no longer uses project config files. Use explicit flags and inferred defaults.' % command
-    if command == 'guidance':
-        return '"guidance" was removed; successful add/verify output includes Kerberos commands in Next steps.'
-    if command == 'modify':
-        return '"modify" was removed; use delete/add/verify. dMSA core attributes are created atomically during add.'
-    if command == 'completion':
-        return '"completion" was removed; use %s for current-session completion.' % completion_eval_hint()
-    if command in ('actions', 'examples', 'help'):
-        return '"%s" was removed; use "dmsaforge -h" or "dmsaforge ACTION -h".' % command
-    return '"%s" is not available.' % command
-
-
-def has_legacy_action_flag(argv):
-    return any(
-        arg in ('--action', '-action') or arg.startswith('--action=') or arg.startswith('-action=')
-        for arg in argv
-    )
-
-
-def legacy_action_message():
-    return '--action was removed; use task-named commands such as "dmsaforge assess ...", "dmsaforge add ...", "dmsaforge verify ...", or "dmsaforge delete ...".'
 
 
 def print_plan_help():
@@ -5111,14 +5073,6 @@ def _main(argv=None):
     if action_help_requested(argv):
         print_action_help(argv[0], no_banner='--no-banner' in argv[1:])
         return 0
-
-    if argv:
-        if argv[0] in REMOVED_COMMANDS:
-            parser = build_subcommand_parser()
-            parser.error(removed_command_message(argv[0]))
-        if has_legacy_action_flag(argv):
-            parser = build_subcommand_parser()
-            parser.error(legacy_action_message())
 
     if argv[0] == 'plan':
         try:
