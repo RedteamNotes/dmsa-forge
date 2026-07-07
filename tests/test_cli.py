@@ -10,7 +10,7 @@ import tempfile
 import types
 import unittest
 
-from dmsa_forge import cli
+from dmsa_forge import ad_utils, cli, cli_metadata, completion, kerberos, reporting
 
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -90,6 +90,11 @@ def assert_options_heading(test_case, text):
 
 
 class DNValidationTests(unittest.TestCase):
+    def test_cli_reexports_ad_utility_helpers(self):
+        self.assertIs(cli.validate_dn_syntax, ad_utils.validate_dn_syntax)
+        self.assertIs(cli.domain_to_base_dn, ad_utils.domain_to_base_dn)
+        self.assertIs(cli.resolve_ipv4_address, ad_utils.resolve_ipv4_address)
+
     def test_validates_escaped_dn_and_scope(self):
         dn = r'CN=Doe\, Jane,OU=Staff,DC=test,DC=local'
         self.assertTrue(cli.validate_dn_syntax(dn))
@@ -130,6 +135,24 @@ class DNValidationTests(unittest.TestCase):
     def test_rejects_invalid_dn_escape_sequences(self):
         self.assertFalse(cli.validate_dn_syntax(r'CN=John\Z,DC=test,DC=local'))
         self.assertFalse(cli.validate_dn_syntax(r'CN=John\2G,DC=test,DC=local'))
+
+
+class KerberosGuidanceTests(unittest.TestCase):
+    def test_cli_reexports_kerberos_guidance_helper(self):
+        self.assertIs(cli.kerberos_guidance_lines, kerberos.kerberos_guidance_lines)
+
+    def test_kerberos_guidance_keeps_rubeus_command_shape(self):
+        lines = kerberos.kerberos_guidance_lines(
+            domain='test.local',
+            username='alice',
+            password='pw',
+            dmsa_name='redpen',
+            dc_ip='10.0.0.5',
+        )
+
+        self.assertIn(r'.\Rubeus.exe hash /user:alice /password:pw /domain:test.local', lines)
+        self.assertIn(r'.\Rubeus.exe asktgt /user:alice /aes256:<AES256_HASH_FROM_RUBEUS_HASH> /domain:test.local /dc:10.0.0.5 /outfile:alice.kirbi /nowrap', lines)
+        self.assertIn(r".\Rubeus.exe asktgs /dmsa /opsec /service:krbtgt/TEST.LOCAL /targetuser:'redpen$' /ticket:alice.kirbi /dc:10.0.0.5 /ptt /nowrap", lines)
 
 
 class CLIBehaviorTests(unittest.TestCase):
@@ -559,6 +582,11 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertNotIn('--include-sd', zsh.stdout)
         self.assertNotIn('--include-sd', bash.stdout)
 
+    def test_completion_and_cli_share_metadata(self):
+        self.assertIs(cli.completion_script, completion.completion_script)
+        self.assertIs(cli.OPTION_ALIASES, cli_metadata.OPTION_ALIASES)
+        self.assertIs(cli.ACTION_SUMMARY, cli_metadata.ACTION_SUMMARY)
+
     def test_completion_options_are_command_specific(self):
         zsh = run_cli('--completion-script', 'zsh')
         bash = run_cli('--completion-script', 'bash')
@@ -574,7 +602,9 @@ class CLIBehaviorTests(unittest.TestCase):
             update_line = next(line for line in text.splitlines() if 'update_opts=' in line)
 
             self.assertIn('--target-account', add_line)
+            self.assertIn('--timeout', add_line)
             self.assertIn('--summary', assess_line)
+            self.assertIn('--timeout', assess_line)
             self.assertIn('--principals-allowed', verify_line)
             self.assertIn('--help', plan_line)
             self.assertIn('--source', update_line)
@@ -2740,6 +2770,8 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertTrue(any('sid=%s' % actual_sid in line for line in result['membership_summary']))
 
     def test_output_file_rejects_symlink_when_supported(self):
+        self.assertIs(cli.write_output_file, reporting.write_output_file)
+
         if not hasattr(os, 'O_NOFOLLOW'):
             self.skipTest('O_NOFOLLOW is not available on this platform')
 

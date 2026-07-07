@@ -1,12 +1,12 @@
 # dMSA Forge
 
-[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.23)
+[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.24)
 [![Tests](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml/badge.svg)](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Impacket%20Apache--1.1-blue)](https://github.com/RedteamNotes/dmsa-forge/blob/main/LICENSE)
 
 **Langue :** [English](../README.md) | [简体中文](README.zh-CN.md) | Français
 
-Version actuelle : `v0.5.23`
+Version actuelle : `v0.5.24`
 
 Forge [dMSA](https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview) pour les workflows LDAP [BadSuccessor](https://www.akamai.com/blog/security-research/abusing-dmsa-for-privilege-escalation-in-active-directory) autorisés : assess, add, verify et delete.
 

