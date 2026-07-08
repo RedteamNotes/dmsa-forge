@@ -307,6 +307,34 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertNotIn('actions', result.stdout)
         self.assertNotIn('examples', result.stdout)
 
+    def test_root_display_flags_are_order_independent(self):
+        for args in (
+            ('--help', '--no-banner'),
+            ('-h', '--no-banner'),
+            ('--no-banner', '--help'),
+            ('--no-banner', '-h'),
+        ):
+            with self.subTest(args=args):
+                result = run_cli(*args)
+
+                self.assertEqual(result.returncode, 0, msg=result.stderr)
+                self.assertTrue(result.stdout.startswith('usage: dmsaforge'))
+                self.assertNotIn(' - by RedteamNotes', result.stdout)
+                self.assertEqual(result.stderr, '')
+
+        for args in (
+            ('--version', '--no-banner'),
+            ('-v', '--no-banner'),
+            ('--no-banner', '--version'),
+            ('--no-banner', '-v'),
+        ):
+            with self.subTest(args=args):
+                result = run_cli(*args)
+
+                self.assertEqual(result.returncode, 0, msg=result.stderr)
+                self.assertTrue(result.stdout.startswith('dmsaforge v'))
+                self.assertEqual(result.stderr, '')
+
     def test_empty_command_prints_help(self):
         result = run_cli(env_overrides={'SHELL': '/bin/zsh'})
 

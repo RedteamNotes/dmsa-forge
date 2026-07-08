@@ -3941,6 +3941,22 @@ def action_help_requested(argv):
     return len(non_display_args) == 0
 
 
+def root_display_request(argv):
+    if not argv:
+        return 'help', False
+    allowed = {'-h', '--help', '-v', '--version', '--no-banner'}
+    if any(arg not in allowed for arg in argv):
+        return None, False
+    no_banner = '--no-banner' in argv
+    if any(arg in ('-h', '--help') for arg in argv):
+        return 'help', no_banner
+    if any(arg in ('-v', '--version') for arg in argv):
+        return 'version', no_banner
+    if no_banner:
+        return 'help', True
+    return None, False
+
+
 def validate_action_requirements(parser, options):
     missing = [
         flag for attr, flag in ACTION_REQUIREMENTS.get(options.action, ())
@@ -4231,29 +4247,14 @@ def _main(argv=None):
             return 2
         return run_completion_script(argv[1])
 
-    if len(argv) == 0:
+    root_display, root_no_banner = root_display_request(argv)
+    if root_display == 'help':
         parser = build_subcommand_parser()
-        print_parser_help_with_hint(parser)
+        print_parser_help_with_hint(parser, no_banner=root_no_banner)
         return 0
-
-    if len(argv) == 1 and argv[0] in ('-h', '--help'):
+    if root_display == 'version':
         parser = build_subcommand_parser()
-        print_parser_help_with_hint(parser)
-        return 0
-
-    if len(argv) == 1 and argv[0] in ('-v', '--version'):
-        parser = build_subcommand_parser()
-        parser.parse_args(argv)
-        return 0
-
-    if len(argv) == 1 and argv[0] == '--no-banner':
-        parser = build_subcommand_parser()
-        print_parser_help_with_hint(parser, no_banner=True)
-        return 0
-
-    if len(argv) == 2 and argv[0] == '--no-banner' and argv[1] in ('-h', '--help'):
-        parser = build_subcommand_parser()
-        print_parser_help_with_hint(parser, no_banner=True)
+        parser.parse_args(['--version'])
         return 0
 
     if len(argv) == 2 and argv[0] == 'update' and argv[1] in ('-h', '--help'):
