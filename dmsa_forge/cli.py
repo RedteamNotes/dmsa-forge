@@ -747,6 +747,26 @@ class DMSAForge:
             deduped.append((method, port, reason))
         return deduped
 
+    def _connection_error_is_auth_failure(self, error):
+        text = str(error or '').lower()
+        auth_markers = (
+            'invalidcredentials',
+            'invalid credentials',
+            'acceptsecuritycontext error',
+            'data 52e',
+            'data 525',
+            'data 530',
+            'data 531',
+            'data 532',
+            'data 533',
+            'data 701',
+            'data 773',
+            'data 775',
+            'kdc_err_preauth_failed',
+            'kdc_err_client_revoked',
+        )
+        return any(marker in text for marker in auth_markers)
+
     def _connect_with_inferred_candidates(self, target_host, dc_ip):
         errors = []
         candidates = self._connection_candidates()
@@ -779,6 +799,12 @@ class DMSAForge:
                 return connection
             except Exception as e:
                 errors.append('%s/%d: %s' % (method, port, e))
+                if self._connection_error_is_auth_failure(e):
+                    message = 'LDAP authentication failed; not retrying inferred connection candidates.'
+                    self._record_inference('connection', 'auth_failed', '%s/%d failed: %s' % (method, port, e), level=logging.WARNING)
+                    logging.error('%s %s' % (message, e))
+                    self._set_report_failure('ldap_auth_failed', message, attempts=errors)
+                    return None
                 if idx == 1 and len(candidates) > 1:
                     self._record_inference('connection', 'failed', '%s/%d failed: %s' % (method, port, e), level=logging.WARNING)
 

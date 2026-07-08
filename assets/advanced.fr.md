@@ -21,7 +21,7 @@ dMSA Forge garde l'état d'exécution visible dans la ligne de commande et ne ch
 - Si `DOMAIN/user` n'est pas un FQDN DNS, un DN `--ou` valide peut inférer le périmètre de domaine et le base DN.
 - Un `--scope-base-dn` explicite et valide fournit le `--base-dn` par défaut lorsqu'aucun base DN n'est fourni.
 - `--method` vaut `LDAP` par défaut, et `--port` vaut `389`.
-- Quand ni la méthode ni le port ne sont explicites, l'exécution tente d'abord LDAP/389 et peut tenter LDAPS/636 seulement si la première connexion échoue.
+- Quand ni la méthode ni le port ne sont explicites, l'exécution tente d'abord LDAP/389 et peut tenter LDAPS/636 seulement si la connexion transport échoue. Les échecs d'authentification s'arrêtent immédiatement.
 - Un `--port 636` seul infère `LDAPS` ; un `--port 389` seul infère `LDAP`.
 - `--method LDAPS` utilise le port `636` par défaut ; définir explicitement l'une des options de connexion désactive l'essai method/port.
 - Les opérations LDAP utilisent un timeout socket par défaut de 30 secondes. Utilisez `--timeout SECONDS` pour les chemins réseau lents mais attendus.

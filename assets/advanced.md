@@ -21,7 +21,7 @@ dMSA Forge keeps runtime state visible in the command line and does not load pro
 - If `DOMAIN/user` is not a DNS FQDN, a valid `--ou` DN can infer the domain scope and base DN.
 - A valid explicit `--scope-base-dn` supplies the default `--base-dn` when no base DN is provided.
 - `--method` defaults to `LDAP`, and `--port` defaults to `389`.
-- When neither method nor port is explicit, execution tries LDAP/389 first and can try LDAPS/636 only if the first connection fails.
+- When neither method nor port is explicit, execution tries LDAP/389 first and can try LDAPS/636 only if the first transport connection fails. Authentication failures stop immediately.
 - A lone `--port 636` infers `LDAPS`; a lone `--port 389` infers `LDAP`.
 - `--method LDAPS` defaults to port `636`; explicitly setting either connection option disables method/port trial.
 - LDAP operations use a default 30-second socket timeout. Use `--timeout SECONDS` for slow but expected network paths.

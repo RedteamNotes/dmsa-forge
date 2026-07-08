@@ -1714,6 +1714,33 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(forge.report['connection']['port'], 636)
         self.assertTrue(any(event['kind'] == 'connection' and event['status'] == 'selected' for event in forge.report['inference']))
 
+    def test_connection_fallback_stops_on_invalid_credentials(self):
+        attempts = []
+
+        class InvalidCredentialsLDAPCompat:
+            def __init__(self, **kwargs):
+                attempts.append((kwargs['use_ldaps'], kwargs['port']))
+                raise Exception(
+                    'Error in bindRequest -> invalidCredentials: 8009030C: '
+                    'LdapErr: DSID-0C090783, comment: AcceptSecurityContext error, data 52e, v65f4'
+                )
+
+        original = cli.LDAPCompat
+        try:
+            cli.LDAPCompat = InvalidCredentialsLDAPCompat
+            options = execution_options(method='LDAP', port=None, method_supplied=False, port_supplied=False)
+            forge = cli.DMSAForge('admin.scott', 'iloveyou1', 'eighteen.htb', '', '', options)
+            with contextlib.redirect_stderr(io.StringIO()):
+                success = forge.run()
+        finally:
+            cli.LDAPCompat = original
+
+        self.assertFalse(success)
+        self.assertEqual(attempts, [(False, 389)])
+        self.assertEqual(forge.report['result']['error_code'], 'ldap_auth_failed')
+        self.assertTrue(any(event['kind'] == 'connection' and event['status'] == 'auth_failed' for event in forge.report['inference']))
+        self.assertFalse(any(event['kind'] == 'connection' and event['status'] == 'retry' for event in forge.report['inference']))
+
     def test_target_account_uses_exact_dn_candidate_after_search_miss(self):
         class CandidateConnection:
             def __init__(self):

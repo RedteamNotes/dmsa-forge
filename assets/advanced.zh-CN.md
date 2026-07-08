@@ -21,7 +21,7 @@ dMSA Forge 保持运行状态都体现在命令行中，不加载项目配置文
 - 如果 `DOMAIN/user` 不是 DNS FQDN，合法的 `--ou` DN 可以反向推断 domain scope 和 base DN。
 - 显式传入合法 `--scope-base-dn` 且未传 `--base-dn` 时，会用 scope base DN 作为默认 base DN。
 - `--method` 默认是 `LDAP`，`--port` 默认是 `389`。
-- 未显式传 method 和 port 时，执行阶段会先尝试 LDAP/389；如果连接失败，才会继续尝试 LDAPS/636。
+- 未显式传 method 和 port 时，执行阶段会先尝试 LDAP/389；只有传输连接失败时，才会继续尝试 LDAPS/636。认证失败会立即停止。
 - 单独传 `--port 636` 会推断 `LDAPS`；单独传 `--port 389` 会推断 `LDAP`。
 - `--method LDAPS` 默认使用端口 `636`；只要显式传了任一连接参数，就不会再做 method/port 试探。
 - LDAP 操作默认使用 30 秒 socket 超时。网络路径慢但属于预期时，可用 `--timeout SECONDS` 调整。
