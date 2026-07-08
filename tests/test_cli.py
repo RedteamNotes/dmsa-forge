@@ -250,6 +250,16 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertNotIn('Behavior:', result.stdout)
         self.assertNotIn('Usage:', result.stdout)
 
+    def test_plan_help_respects_no_banner_display_only(self):
+        for args in (('plan', '--no-banner'), ('plan', '--help', '--no-banner')):
+            with self.subTest(args=args):
+                result = run_cli(*args)
+
+                self.assertEqual(result.returncode, 0, msg=result.stderr)
+                self.assertTrue(result.stdout.startswith('usage: dmsaforge plan'))
+                self.assertNotIn(' - by RedteamNotes', result.stdout)
+                self.assertEqual(result.stderr, '')
+
     def test_action_flag_is_plain_unrecognized_argument(self):
         result = run_cli(
             'add',
@@ -912,11 +922,11 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertTrue(payload['controls']['no_banner'])
         self.assertIn('next_steps', payload['result'])
         self.assertEqual(
-            payload['result']['badsuccessor_values']['msds_delegatedmsastate'],
+            payload['result']['badsuccessor_values']['msDS-DelegatedMSAState'],
             '2 - migration complete',
         )
         self.assertEqual(
-            payload['result']['badsuccessor_values']['msds_managedaccountprecededbylink'],
+            payload['result']['badsuccessor_values']['msDS-ManagedAccountPrecededByLink'],
             'DN resolved from Administrator',
         )
         self.assertIn('dmsaforge add test.local/admin:pw', payload['result']['next_steps'][0]['command'])
@@ -1466,7 +1476,7 @@ class CLIBehaviorTests(unittest.TestCase):
         self.assertEqual(payload['inputs']['dmsa_name'], 'redpen')
         self.assertEqual(payload['inputs']['dns_hostname'], 'redpen.test.local')
         self.assertTrue(payload['inputs']['planned_dmsa_dn'].startswith('CN=redpen,'))
-        self.assertEqual(payload['result']['badsuccessor_values']['samaccountname'], 'redpen$')
+        self.assertEqual(payload['result']['badsuccessor_values']['sAMAccountName'], 'redpen$')
         for step in payload['result']['next_steps']:
             self.assertNotIn('--dmsa-name redpen$', step['command'])
 

@@ -1,12 +1,12 @@
 # dMSA Forge
 
-[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.25)
+[![Release](https://img.shields.io/github/v/release/RedteamNotes/dmsa-forge?label=release)](https://github.com/RedteamNotes/dmsa-forge/releases/tag/v0.5.26)
 [![Tests](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml/badge.svg)](https://github.com/RedteamNotes/dmsa-forge/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Impacket%20Apache--1.1-blue)](https://github.com/RedteamNotes/dmsa-forge/blob/main/LICENSE)
 
 **Language:** English | [简体中文](assets/README.zh-CN.md) | [Français](assets/README.fr.md)
 
-Current release: `v0.5.25`
+Current release: `v0.5.26`
 
 A [dMSA](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview) forge for authorized [BadSuccessor](https://www.akamai.com/blog/security-research/abusing-dmsa-for-privilege-escalation-in-active-directory) LDAP workflows: assess, add, verify, and delete.
 
@@ -131,7 +131,7 @@ Target account resolution is LDAP-search based. `--target-account` writes `msDS-
 
 Safety controls:
 
-- Use `dmsaforge plan ACTION ...`, `--dry-run`, or `--plan` to validate options and print the planned LDAP operations without opening an LDAP connection. JSON reports include the planned BadSuccessor attribute values for add workflows.
+- Use `dmsaforge plan ACTION ...`, `--dry-run`, or `--plan` to validate options and print the planned LDAP operations without opening an LDAP connection. JSON reports include the planned BadSuccessor attribute values for add workflows using their canonical LDAP names.
 - Use `--profile safe` for a redacted dry-run preset, `--profile report` for JSON reports, or `--profile ci` for quiet JSON/no-banner output.
 - `DOMAIN/user` infers `--scope-domain`, `--scope-base-dn`, and `--base-dn`; a valid `--scope-base-dn` can also supply the default base DN. Override with explicit flags when the authorized scope differs.
 - LDAP/389 is tried first when `--method` and `--port` are omitted. If that connection fails, dMSA Forge can try LDAPS/636 and records the attempted candidates in terminal output and JSON/text reports. A lone `--port 636` infers LDAPS; pin both method and port to require an exact pair.

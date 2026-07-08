@@ -2816,8 +2816,9 @@ def print_action_help(action, no_banner=False):
     sys.stdout.flush()
 
 
-def print_plan_help():
-    print_action_help_header()
+def print_plan_help(no_banner=False):
+    if not no_banner:
+        print_action_help_header()
     print('usage: dmsaforge plan ACTION [domain/]username[:password] [options]')
     print('')
     print('main:')
@@ -3192,6 +3193,15 @@ def report_input_principals_allowed(options):
     return '(not set)'
 
 
+BADSUCCESSOR_VALUE_KEYS = {
+    'dMSA DN': 'dmsa_dn',
+}
+
+
+def badsuccessor_value_key(label):
+    return BADSUCCESSOR_VALUE_KEYS.get(label, label)
+
+
 def attach_planned_badsuccessor_values(report, options):
     if report.get('mode') != 'dry_run' or options.action != 'add':
         return
@@ -3199,8 +3209,7 @@ def attach_planned_badsuccessor_values(report, options):
     inferred_kinds = inferred_plan_kinds(report)
     values = {}
     for name, value, kind in planned_bad_successor_values(options, report):
-        key = name.replace(' ', '_').replace('-', '_').lower()
-        values[key] = mark_inferred(value, kind, inferred_kinds)
+        values[badsuccessor_value_key(name)] = mark_inferred(value, kind, inferred_kinds)
     report.setdefault('result', {}).setdefault('badsuccessor_values', values)
 
 
@@ -3900,8 +3909,10 @@ def build_subcommand_parser():
 def normalize_plan_shortcut(argv):
     if not argv or argv[0] != 'plan':
         return list(argv)
-    if len(argv) == 1 or argv[1] in ('-h', '--help'):
-        print_plan_help()
+    display_only = [arg for arg in argv[1:] if arg in ('--no-banner', '-h', '--help')]
+    no_banner = '--no-banner' in argv[1:]
+    if len(argv) == 1 or len(display_only) == len(argv[1:]):
+        print_plan_help(no_banner=no_banner)
         return None
     action = argv[1]
     if action not in ACTION_CHOICES:
